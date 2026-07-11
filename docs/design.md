@@ -349,7 +349,21 @@ a cross-package negative fixture), then classifies each use by its
 | `*ast.IncDecStmt` | compound-assign |
 | `*ast.AssignStmt`, compound-assign token (`+=`, etc.), ident in `Lhs` | compound-assign |
 | `*ast.AssignStmt`, `Tok == token.ASSIGN`, ident in `Lhs` | write |
+| `*ast.RangeStmt`, `Tok == token.ASSIGN`, ident is `Key` or `Value` | write |
 | anything else (Rhs, call arg, selector/index base, condition, ...) | read (default) |
+
+**Found during 3b `/i` self-review**: the assign-form range clause
+(`for globalCount = range xs`, reusing an existing package var rather than
+`for globalCount := range xs` declaring a new local one) writes to the var
+on every iteration, but its immediate parent is an `*ast.RangeStmt`, not an
+`*ast.AssignStmt` — the original classifier had no case for it and
+silently mis-classified it as a read. Added the `*ast.RangeStmt` row above
+plus a positive fixture (assign-form) and an adjacent negative
+(declare-form, which shadows via `Defs` and never reaches the classifier
+at all) to lock in the fix. A multi-value-assignment fixture
+(`globalCount, err = 5, nil`) was also added as regression coverage for
+already-correct behavior (`identInList` checks list membership, not
+position).
 
 **Documented limitation — selector-chain boundary**: classification only
 inspects the identifier's *immediate* parent, not deeper into a selector
@@ -434,11 +448,14 @@ and `testdata/src/b/b.go` fixtures were written and confirmed failing
 (`impuresource` package didn't exist yet) BEFORE `impuresource.go` was
 implemented.
 
-- `go test ./impuresource/...` — analysistest golden-fixture suite, 16
-  cases (9 positive: 4 call-detection shapes covering regular/aliased/
-  dot-imports, 5 var-touch classifications covering all four verbs;
-  7 negative: method-shadow, name-shadow, local-scope, cross-package,
-  allowlist-miss, selector-chain-boundary, const-vs-var) all correct.
+- `go test ./impuresource/...` — analysistest golden-fixture suite, 13
+  fixture functions asserting 13 `// want`-tagged diagnostics (4
+  call-detection shapes covering regular/aliased/dot-imports; 7 var-touch
+  classifications covering all four verbs plus the selector-chain-boundary
+  double-read, the range-assign write, and the multi-assign write) and 7
+  true negatives with no diagnostic expected (method-shadow, name-shadow,
+  local-scope, cross-package, allowlist-miss, const-vs-var,
+  range-declare-shadow) — all correct.
 - `go test ./...` — full repo suite green, `filterloop` unaffected.
 - `go vet ./...` — zero findings on the repo's own code.
 - Built binary (`multichecker.Main(filterloop.Analyzer, impuresource.Analyzer)`)

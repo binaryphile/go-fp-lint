@@ -108,8 +108,9 @@ func matchPackageVarTouch(pass *analysis.Pass, ident *ast.Ident, stack []ast.Nod
 }
 
 // classifyUse classifies ident's use by its immediate ancestor: address-of
-// (&ident), compound-assign (ident++, ident += x), write (ident = x), or
-// read (the default). Only inspects the immediate parent; deeper
+// (&ident), compound-assign (ident++, ident += x), write (ident = x, or the
+// assign-form range clause `for ident = range xs` reusing an existing var),
+// or read (the default). Only inspects the immediate parent; deeper
 // selector-chain writes (e.g. ident.Field = x) fall through to read — see
 // docs/design.md's selector-boundary limitation.
 func classifyUse(ident *ast.Ident, stack []ast.Node) string {
@@ -133,6 +134,10 @@ func classifyUse(ident *ast.Ident, stack []ast.Node) string {
 			if parent.Tok == token.ASSIGN {
 				return "write to"
 			}
+		}
+	case *ast.RangeStmt:
+		if parent.Tok == token.ASSIGN && (parent.Key == ident || parent.Value == ident) {
+			return "write to"
 		}
 	}
 	return "read of"

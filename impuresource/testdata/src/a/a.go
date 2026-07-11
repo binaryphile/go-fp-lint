@@ -96,3 +96,33 @@ func selectorBoundary() {
 func constNotFlagged() {
 	_ = globalConst
 }
+
+// rangeAssignWrite: the assign-form range clause (`for globalCount = range
+// xs`, reusing an existing var rather than `:=` declaring a new one)
+// writes to globalCount on every iteration — an *ast.RangeStmt parent, not
+// an *ast.AssignStmt (fixture #17; found during 3b /i self-review).
+func rangeAssignWrite(xs []int) {
+	for globalCount = range xs { // want "write to package-scope var globalCount"
+	}
+}
+
+// rangeDeclareNotFlagged: the declare-form range clause (`for globalCount
+// := range xs`) shadows with a NEW function-local var rather than writing
+// the package var — the ident is a Defs entry, not a Uses entry, so it
+// never reaches matchPackageVarTouch at all (adjacent negative to fixture
+// #17, added during 3b /i self-review).
+func rangeDeclareNotFlagged(xs []int) {
+	for globalCount := range xs {
+		_ = globalCount
+	}
+}
+
+// multiAssignWrite: globalCount as one of several Lhs targets in a
+// multi-value assignment still classifies as write — identInList checks
+// list membership, not position (fixture #18; regression coverage for
+// already-correct behavior, added during 3b /i self-review).
+func multiAssignWrite() error {
+	var err error
+	globalCount, err = 5, nil // want "write to package-scope var globalCount"
+	return err
+}
