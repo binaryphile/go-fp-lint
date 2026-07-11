@@ -212,7 +212,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
-| pointer receiver where value receiver works | go-dev | C | **#65784** (partial overlap `go vet copylocks`) |
+| pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
 | internal mock detection (design smell) | go-dev | C | **#65785** |
 | slice/map field mutation without `Clone()` | go-dev | C | **#65786** (aliasing — undecidable; scope tight) |
 | `option.Basic` / `option.Option` API drift | fluentfp / go-dev | C (rename → B) | no analyzer task yet |
@@ -227,7 +227,11 @@ purity design **#66155** (gates enforcement #66086), this design.md write
 enforced by existing tooling (`copylocks`, `errorlint`, `copyloopvar`,
 `thelper`, staticcheck `ST10xx`, `go test` example validation). go-fp-lint does
 **not** reimplement these — it scopes to the fluentfp/FP-specific rules no
-existing linter covers.
+existing linter covers. **Exception, not a violation**: `recvshape` (§v5)
+ports `copylocks`' unexported `lockPath` *exclusion* algorithm to stay
+non-contradictory with it — this reuses `copylocks`' own lock-detection
+logic as a supporting check, it does not reimplement `copylocks`' flagging
+behavior (value-receiver-on-lock-type), which remains solely `copylocks`' job.
 
 ### Feasibility resolution: hidden actions in ostensibly-pure functions (jeeves #65787)
 
@@ -633,6 +637,101 @@ covers this finding; this section is the concrete evidence for whoever
 picks that audit up, filed via `/grade r1` finding 6 discussion (jeeves
 tasks.jeeves interaction 66952).
 
+## v5: `recvshape` (jeeves #65784)
+
+Fifth analyzer, fifth package: `recvshape/`. Detects pointer-receiver
+methods that could be value receivers per go-development-guide.md §3 Value
+Semantics — default to value receivers; pointer receivers are for
+lock-containing types, interface-satisfaction consistency, or methods that
+actually mutate the receiver's own fields.
+
+**Partial overlap with `go vet copylocks` — resolved, not duplicated.**
+`copylocks` (`golang.org/x/tools/go/analysis/passes/copylock`) flags the
+*opposite* direction: a value-receiver method (or any value copy) on a type
+containing a lock, via its unexported `lockPath` algorithm (does `*T`
+implement `sync.Locker` while `T` does not, recursed through struct
+fields/arrays; pointer and interface fields are deliberately NOT recursed
+into — "safe to copy"). `recvshape` flags the reverse: an unnecessary
+pointer receiver. Without an independent lock exclusion, it would
+contradict `copylocks` — recommending a value receiver on a type where
+pointer semantics are actually required. Since `lockPath` is
+unexported/internal to `x/tools`, `recvshape` ports the algorithm
+(`typeHasLock`/`lockPath` in `recvshape.go`) rather than importing it.
+
+**Detection algorithm.** For each named struct type `T` with at least one
+pointer-receiver method:
+
+1. **Lock exclusion** (`typeHasLock`) — ported `lockPath`: recurse through
+   struct fields (unwrapping arrays), checking
+   `types.Implements(*fieldType, sync.Locker) && !types.Implements(fieldType, sync.Locker)`.
+   If any field (or the type itself) qualifies, skip every method on `T`.
+   Faithfully mirrors upstream, including NOT recursing through pointer
+   fields — a `*innerLock` field is safe to copy (only the pointer is
+   duplicated, not the lock), so a type reaching a lock only through a
+   pointer field is correctly left un-excluded and its non-mutating
+   pointer-receiver methods are legitimately flaggable (see
+   `PtrLockHolder` fixture).
+2. **Interface exclusion** (`typeSatisfiesInterface`) — skip `T` entirely
+   if `*T` implements any *non-empty* interface type lexically referenced
+   anywhere in the package's own files (`pass.TypesInfo.Types`, filtered to
+   `Underlying().(*types.Interface)` with `NumMethods() > 0` — the empty
+   interface is excluded since every type trivially implements it, which
+   would otherwise disable the analyzer entirely).
+3. **Mutation detection** (`mutatesReceiver`) — AST scan for: assignment
+   whose LHS is a selector rooted at the receiver (matched via
+   `pass.TypesInfo.Uses[ident] == recvObj`, object identity, not name-string
+   matching); `IncDecStmt` on such a selector; whole-value pointer-deref
+   assignment (`*t = ...`); or `&t.field` (address-of any receiver field)
+   anywhere in the body — conservative, favors false-negative over
+   false-positive. A blank/unnamed receiver has no identifier to trace
+   mutation through, so it's always eligible to flag (subject to the
+   type-level exclusions above).
+4. **Type-level consistency exemption** — if ANY pointer-receiver method on
+   `T` mutates, skip flagging every method on `T`, not just the mutator.
+   Real code mixing receivers per-method on the same type is the
+   anti-pattern the guide steers away from in the *other* direction; the
+   checker doesn't fight consistency choices.
+5. **Generics** — receiver types with non-empty `TypeParams()` are skipped
+   entirely (v1 scope; see Known limitations).
+
+**Known limitations (accepted v1 scope, not solved):**
+
+- **Cross-package-only interface conformance.** A type satisfying
+  `io.Writer` etc. with no lexical mention of that interface anywhere in
+  its own package is not detected — same undecidability class as general
+  interface satisfaction.
+- **Call-site-only interface polymorphism.** `pass.TypesInfo.Types` only
+  records the static type of expressions actually *written* in the
+  package. A bare call site like `sort.Sort(t)` never writes
+  `sort.Interface` as a type expression anywhere — only `t`'s own concrete
+  type is recorded at that call — so it is NOT caught by the interface
+  exclusion. Concretely: a type satisfying `fmt.Stringer` purely through
+  `%v`/`%s` formatting call sites, with no local `fmt.Stringer`-typed
+  var/param/assert, will be incorrectly flagged. Resolving this would
+  require resolving callee signatures at every call expression — ruled out
+  as materially larger scope than the lexical-mention scan.
+- **Helper-call-mediated mutation not traced**, including: mutation
+  through a field's own method (`t.buf.Write(...)`, `t.list.PushBack(...)`);
+  slice/map element mutation (`t.items[0] = x`, `delete(t.m, k)`); and
+  passing a receiver field by reference to another function that mutates
+  it there. Undecidable in general at this Tier-C's AST-only scope;
+  direct-field-mutation-only matches the guide's literal per-method
+  question ("does *this* method need to modify the struct's own fields").
+- **Ported-not-imported `lockPath` requires periodic re-audit.** Because
+  `lockPath` is copied rather than imported (unexported/internal to
+  `x/tools`), a future upstream bug fix or semantic extension to the real
+  `copylock` analyzer will silently NOT propagate here. Re-compare
+  `recvshape.go`'s `lockPath` against the vendored `x/tools` version's
+  `copylock.go` whenever the `golang.org/x/tools` dependency is bumped.
+- **Generic receiver types** (`T.TypeParams() != nil`) are skipped
+  entirely rather than porting `lockPath`'s upstream `*types.TypeParam`
+  branch (`typeparams.StructuralTerms`) — deferred, not silently dropped.
+
+**Cross-vendor `/grade r1` (A-, APPROVE)** confirmed the design is sound
+and identified the limitations above as the accepted scope boundary rather
+than oversights; all findings were absorbed into the plan before
+implementation (jeeves tasks.jeeves interactions 67060–67062).
+
 ## Integration points (documented, not wired up this cycle)
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
@@ -802,3 +901,74 @@ lines) BEFORE `mapshape.go`'s real logic was implemented.
   were absorbed directly into the implementation rather than back into the
   already-published plan file; logged as `/variance 65781` on
   `tasks.jeeves`, not a scope or contract change.
+
+## Verification performed (v5 cycle — `recvshape`, jeeves #65784)
+
+TDD red/green (REQUIRED for new behavioral surface per khorikov-unit-testing-guide.md):
+`recvshape_test.go` + `testdata/src/a/a.go` (17 type declarations,
+including the `Stringer` interface and `innerLock` helper type; 3 positive
+`// want`-tagged fixtures) were written against a stub no-op `Analyzer` and
+confirmed failing with exactly 3 missing-diagnostic failures — `NoMutate`,
+`BlankRecv`, `PtrLockHolder` — BEFORE `recvshape.go`'s real detection logic
+(lock exclusion, interface exclusion, mutation detection, type-level
+exemption) was implemented.
+
+- `go test ./recvshape/...` — the 3 `// want`-tagged positives pass, and
+  every other method/type in the fixture file implicitly asserts a
+  negative (`analysistest` fails on any unexpected diagnostic), on the
+  first real-logic implementation attempt. Negative coverage includes:
+  legitimate
+  mutation (direct assign, `IncDecStmt`, whole-value pointer-deref);
+  type-level mixed-receiver exemption; the conservative `&t.field`
+  address-of heuristic; direct/nested/embedded/array-of-structs lock
+  exclusion; in-package interface-satisfaction exclusion; a composition
+  fixture with two simultaneous exclusion conditions (lock + interface) on
+  one type, verifying no double-flag or crash; and a value-receiver-only
+  type the analyzer never examines.
+- **`PtrLockHolder` fixture correction during implementation**: the
+  original plan's fixture-matrix description treated "lock reached via an
+  embedded pointer to a lock-containing struct" as an expected-negative
+  exclusion case. Investigating upstream `copylock.go` while implementing
+  `lockPath` showed this is backwards — pointers are explicitly "safe to
+  copy" in copylock's own semantics (copying a struct with a `*Mutex`
+  pointer field duplicates the pointer, not the lock), so the ported
+  algorithm correctly does NOT exclude this case, and the fixture was
+  written as a POSITIVE (flagged) case instead — a closer match to
+  upstream than the plan anticipated, not a deviation from it. Documented
+  in §v5 above and in the fixture's own comment.
+- `go build ./...` / `go vet ./...` / `go test ./...` — scoped to the full
+  repo (all 6 analyzer packages + `cmd/go-fp-lint`); all green.
+- Built binary smoke-tested via `go vet -vettool=` against
+  `impuresource/impuresource.go` and `nestedcall/nestedcall.go` — zero
+  `recvshape` diagnostics (other analyzers' pre-existing diagnostics
+  present and unaffected), no crashes.
+- Broader false-positive corpus check: built binary run via
+  `go vet -vettool=` against `~/projects/era`'s Go module (30 packages,
+  large unrelated real-world codebase; other analyzers fired dozens of
+  genuine diagnostics across the run, confirming the tool actually
+  traversed the packages) — **zero `recvshape` diagnostics**. Honest
+  characterization: this corpus run functioned as a crash/false-positive
+  check (passed — no crashes, no noise) rather than a true-positive
+  plausibility check, since it produced no hits to spot-check at all;
+  plausible explanation is that era's types mostly either mutate
+  legitimately or fall under the type-level consistency exemption, but
+  this wasn't independently confirmed.
+- **Non-contradiction with `go vet copylocks`** (the cycle's core
+  correctness property, per `/grade r1` finding 1): ran stdlib `go vet`
+  (includes `copylocks`) against `recvshape/testdata/src/a/` — zero
+  diagnostics (the fixture file's lock-containing types are only ever
+  touched through pointer-receiver methods, so `copylocks` has nothing to
+  flag). Ran the built `recvshape` binary against the same file — flagged
+  exactly the 3 expected positives, none of which are lock-containing
+  types. Additionally, this non-contradiction is **structural, not just
+  empirical**: `recvshape` only ever examines pointer-receiver methods
+  (`byType` collection filters on `*ast.StarExpr` receivers), so it can
+  never touch the value-receiver methods `copylocks` polices — the two
+  analyzers operate on disjoint method sets by construction.
+- One round of cross-vendor `/grade` (R1: A-, APPROVE) — findings
+  absorbed: documented the `lockPath`-port maintenance/re-audit
+  obligation, the field-method/slice-map/pass-by-reference mutation
+  false-positive gap, a concrete `fmt.Stringer` call-site-only example for
+  the interface-exclusion gap, and added the composition + lock-adversarial-matrix
+  fixtures — all reflected in §v5's Known limitations above (jeeves
+  tasks.jeeves interactions 67060–67062).
