@@ -112,23 +112,122 @@ jeeves #65780 — see §v1.1 above.
 shape tight and parallel to the guard-if rule; extending to init-form
 guards is a possible future increment, not filed as a task.
 
-## Roster (this cycle: 1 shipped, rest deferred/tracked)
+## Enforcement tiers and the guide-division model
 
-| Check | Guide | Status |
-|---|---|---|
-| `filterloop` — for-loop filter shape → `KeepIf` | fluentfp-guide.md | **Shipped v1** |
-| continue-guarded filter shape | fluentfp-guide.md | **Shipped v1.1** (jeeves #65780) |
-| map-loop shape → `Convert`/`ToString`/etc. | fluentfp-guide.md | Deferred — no task filed yet |
-| inline lambda inside fluentfp chain → named function/method ref | fluentfp-guide.md | Deferred — no task filed yet |
-| nested `slice.X(slice.Y(...))` paren-depth violation | fluentfp-guide.md | Deferred — no task filed yet |
-| pointer receiver where value receiver would work | go-development-guide.md | Deferred — no task filed yet |
-| internal mock detection (design smell) | go-development-guide.md | Deferred — no task filed yet |
-| slice/map field mutation without `Clone()` | go-development-guide.md | Deferred — no task filed yet |
-| hidden actions in ostensibly-pure functions | functional-programming-unified-guide.md | Feasibility resolved by split (jeeves #65787) — direct-call + package-var-touch detection **Shipped v2** (jeeves #65900, `impuresource`; see §v2 below); transitive propagation tracked as jeeves #65901 |
-| `option.Basic`/`option.Option` API drift check | fluentfp API vs go-development-guide.md | Deferred — no task filed yet |
+The roster below was first conceived as a flat list of linter checks.
+Investigation jeeves #65931 (2026-07-11; era memories `e6372253f9f8`,
+`4e1d8c9ad4a8`, grade-absorption corrections `75a0de9ced0d`) reframed it: each
+convention belongs to one of three enforcement tiers, decided by properties of
+its **fix**, not its detection (detection is always mechanical AST-matching).
 
-Each deferred item needs its own `evtctl task` filed against `tasks.jeeves`
-before pickup (not done in this cycle — see the closeout for this arc).
+**The fault line.** A rewrite can be always-on and automatic only if it is
+deterministic, semantics-preserving, and requires **no semantic planning beyond
+local syntax**. Synthesizing a binding name is the most common disqualifier
+(gofmt never manufactures identifiers; `gofmt -r` and `eg` only substitute
+existing syntax; `SuggestedFix` is raw `TextEdit`s with no scope model), but not
+the only one — evaluation-order and aliasing hazards also require planning
+beyond local syntax.
+
+The three tiers:
+
+- **Tier A — Format.** Deterministic, name-free, semantics-preserving, safe to
+  apply on every save. Vehicle: a formatter pass (gofmt-class).
+- **Tier B — Codemod.** Mechanical detection, but the fix synthesizes a name or
+  needs contextual planning. Vehicle: an offered / `-fix` codemod, not
+  always-on. Where the fix needs a name, the codemod hoists to a `change_me_N`
+  placeholder and an *optional* downstream naming pass (LLM or human) fills it.
+- **Tier C — Lint.** Detectable, but the fix needs a judgment the tool can't
+  make, the rule carries a stated exception, or the property is statically
+  undecidable. Vehicle: a diagnostic (`impuresource` §v2 is the first shipped
+  Tier-C check).
+
+**The guide-division model (and its limits).** Because a formatter/codemod
+owning a rule removes that rule's three standing costs — guide context (guides
+are force-read every session), authoring effort, and rework loops — the tier
+partition doubles as a **guide-reduction map**: a rule's mechanical
+*specification* can leave the guide once a tool owns it. Two constraints keep
+this honest:
+
+- **Specification ≠ rationale.** A guide also teaches. Shedding a rule's
+  mechanical "how" does not license deleting its conceptual "why" — the
+  rationale stays (condensed) for onboarding. The guide shrinks *modestly*, not
+  to zero. (grade #65931 R1 X1.)
+- **Shrink lags ship.** A rule leaves the guide only *after* a tool enforces it
+  (else the convention rots un-enforced), and the tool must run automatically in
+  the workflow (pre-commit / gate-bash / on-save) for the savings to be real.
+
+**The payoff is back-loaded.** Tier A is small — essentially one whitespace
+family (chain line-layout). The larger guide-shrink lives in Tier B, whose
+primary value is **one-time bulk migration** of existing code, not steady-state
+authoring: in steady state, a Tier-C diagnostic plus a human-named `gopls`
+extract may beat a codemod whose LLM-generated names still need review (the cost
+is relocated, not eliminated). The optional LLM naming pass is gated on a
+demonstrated migration need, not an assumed component. (grade #65931 R1
+P1/P2/P7.)
+
+**Codemod transformation contract (Tier B, name-synthesizing fixes).**
+Extraction-to-intermediate is applied only where provably safe: statement
+position (assignment RHS / `return` / expr-statement) **minus** disqualifiers —
+inside `defer`/`go` argument construction, free-variable capture that changes
+evaluation timing, a subexpression not provably evaluated exactly once, or an
+aliasing-sensitive receiver. Everywhere else the codemod flags rather than
+rewrites. Statement position is a hazard-reducing heuristic, **not** a proof of
+semantic preservation. (grade #65931 R1 P3, blocking.)
+
+**Detection is the shared foundation.** A flag, a `SuggestedFix`, and a codemod
+all need the identical detector, so a check's detector is a no-regrets build
+regardless of which tier ultimately delivers it. This is why the paren-depth /
+uniform-commas detector (#65783) proceeds as a Tier-C diagnostic, with the
+Tier-B `change_me` fix layered on later.
+
+**Purity checking is Tier C, and normativity is deferred.** `impuresource`
+(§v2) ships as an *informational* action-inventory — it reports "function
+directly calls `os.Getenv`," not "this Calculation is impure," because no
+purity-declaration convention exists in the corpus. A normative upgrade needs a
+declared-purity marker; the naive `//fp:calc` comment-marker was found unsound
+in this higher-order library (grade #66086 R1, D+; era `bab8e36b72eb`) — the
+viable form is a bounded effect-system (define the Calculation purity boundary;
+a first-order subset; conditionally-pure combinator effect signatures), tracked
+as the deferred design **#66155**, gating enforcement **#66086**.
+
+**Generality (open, N=1).** The format/lint *split* is well-precedented — bash's
+`shfmt` + shellcheck-convention-plugin is the same division, and is why
+go-fp-lint was modeled on shellcheck. The specific three-tier
+format/codemod/naming architecture is, so far, an N=1 fluentfp hypothesis.
+(grade #65931 R1 P6.)
+
+## Roster (tiered)
+
+Tier per the model above. "C→B" = ships now as a Tier-C detector (the shared
+foundation); a Tier-B codemod fix may be layered on later.
+
+| Check | Guide(s) | Tier | Status / task |
+|---|---|---|---|
+| `filterloop` — filter shape → `KeepIf` | fluentfp | C | **Shipped v1** |
+| continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
+| `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: #65901 |
+| chain line-layout (one-op-per-line / inline) | all three | **A** | formatter — #66031 |
+| method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
+| paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **#65783**; `change_me` fix deferred **#66034** |
+| double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | #65783 detector scope + #66034 |
+| map-loop → `Convert`/`ToString` | fluentfp / go-dev | C | **#65781** |
+| inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
+| pointer receiver where value receiver works | go-dev | C | **#65784** (partial overlap `go vet copylocks`) |
+| internal mock detection (design smell) | go-dev | C | **#65785** |
+| slice/map field mutation without `Clone()` | go-dev | C | **#65786** (aliasing — undecidable; scope tight) |
+| `option.Basic` / `option.Option` API drift | fluentfp / go-dev | C (rename → B) | no analyzer task yet |
+
+Deferred / optional (tracked): `change_me` extraction substrate **#66034**, LLM
+naming pass **#66036** (gated on a demonstrated migration need), guide-shrink
+umbrella **#66033** (gated per-tier on the owning tool shipping), effect-lite
+purity design **#66155** (gates enforcement #66086), this design.md write
+**#66161**.
+
+**Overlap discipline.** Several conventions surveyed in #65931 are already
+enforced by existing tooling (`copylocks`, `errorlint`, `copyloopvar`,
+`thelper`, staticcheck `ST10xx`, `go test` example validation). go-fp-lint does
+**not** reimplement these — it scopes to the fluentfp/FP-specific rules no
+existing linter covers.
 
 ### Feasibility resolution: hidden actions in ostensibly-pure functions (jeeves #65787)
 
