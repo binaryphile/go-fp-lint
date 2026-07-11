@@ -210,7 +210,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
-| map-loop → `Convert`/`ToString` | fluentfp / go-dev | C | **#65781** |
+| map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
 | pointer receiver where value receiver works | go-dev | C | **#65784** (partial overlap `go vet copylocks`) |
 | internal mock detection (design smell) | go-dev | C | **#65785** |
@@ -461,6 +461,56 @@ under the wrapper's shared source position (`ssa.Function.Synthetic`
 wrappers share position with the function they wrap). Fixed by excluding
 `Func.Synthetic != ""` from report targets.
 
+**Absorbed from IMPL-stage `/grade` (finding 1, GAP)**: the initial fix
+was justified only against the one pointer-wrapper category it was found
+against, while the code excludes *every* synthetic function — a broader
+mechanism than the demonstrated failure. Confirmed this is the correct
+general policy **for every `Synthetic != ""` category present in the
+inspected `x/tools/go/ssa` version** (pointer wrappers: `"from type
+information"`; bound-method-value closures: `"bound method wrapper for
+..."`; generic instantiations: `"instance of ..."`/`"instantiation
+wrapper of ..."`) — none of these is code a user wrote, so none should
+ever be a report target regardless of which category produced it. This is
+a policy validated against the categories `go/ssa` generates today, not a
+timeless semantic guarantee — a future `x/tools` release adding a new
+synthetic category would inherit the same exclusion by construction
+(anything with `Synthetic != ""`), but that's an inference from the
+policy's shape, not something re-verified here. Added fixture #12
+(`funcMethodValue`, a bound
+method value `f := h.Leaf; f()`) as a second, structurally different
+synthetic category, empirically confirming the general policy: the real
+named caller is still correctly flagged (reachability propagates
+*through* the synthetic bound-thunk hop), while the synthetic thunk
+itself is correctly excluded from reporting.
+
+**Absorbed from IMPL-stage `/grade` (finding 4, WEAKENS)**: the
+"intra-package only" framing could read as the call graph itself being
+scoped to one package by construction. Sharper mechanism: `static.
+CallGraph`'s traversal loop does walk every package in
+`prog.AllPackages()`, imports included — the boundary is enforced by
+imported packages never being `Build()`'d (`buildssa` only builds the
+analyzed package; imports are created via `CreatePackage(p, nil, nil,
+true)`, so they have no `Blocks` and contribute zero `Out` edges), not by
+the graph excluding them outright. Fixture #8 (cross-package) is the
+empirical check for this; the mechanism is now also documented as a code
+comment at the `static.CallGraph` call site.
+
+**Absorbed from IMPL-stage `/grade` (finding 5, WEAKENS)**: "not a
+purity question" for builtin calls slightly overclaimed exhaustiveness.
+The `*ssa.Builtin` exclusion is verified empirically for `println`
+(fixture #11), not proven to cover every builtin's SSA lowering shape. A
+missed shape would at worst be a false-negative "indeterminate" report on
+an already-out-of-scope, non-purity-relevant category — low severity,
+now stated honestly in the code comment rather than implied as exhaustive.
+
+**Considered, not changed (finding 6, WEAKENS — message wording)**: the
+grader found `"actions are infectious"` project-specific flavor text that
+adds less value than the lead clause. Left as-is: the wording mirrors
+`impuresource`'s already-shipped precedent (`"direct call to X — actions
+are not calculations (see ...)"`), and changing only this analyzer's
+phrasing would create an inconsistency between two sibling diagnostics a
+user will see side-by-side in the same tool run.
+
 **Documented subtlety, not a bug**: a trivial non-branching closure
 binding (`f := time.Now; f()`, no address-of, no reassignment) can resolve
 `StaticCallee()` directly via SSA register-lifting — the indeterminate-call
@@ -523,6 +573,65 @@ Split to task **#66830** — confirmed at `/grade r1` finding 6 that the two
 checks have genuinely distinct violation conditions (same-aggregate-op
 composition vs. nesting-depth/comma-count metrics) and don't share
 meaningful implementation beyond the generic CallExpr walk.
+
+## v4: `mapshape` (jeeves #65781)
+
+Fourth analyzer, fourth package: `mapshape/`. Detects the map-loop shape —
+a for-range loop with no `if`-guard whose body is exactly one
+`acc = append(acc, EXPR)`, where `EXPR` transforms the range value
+(distinct from `filterloop`'s guard-if/continue-guard shapes, which this
+detector structurally cannot match, and from a plain copy-loop where `EXPR`
+is the bare range identifier — deliberately not flagged, nothing to
+transform).
+
+**Target-type classification (`pass.TypesInfo`)**: `T` = the range value's
+type, `R` = `EXPR`'s type.
+
+1. `types.Identical(T, R)` → same-type mapping → `slice.From(xs).Transform(fn)`.
+2. `R` matches one of the ~10 fluentfp typed-alias targets (`bool`, `byte`,
+   `error`, `float32`, `float64`, `int`, `int32`, `int64`, `string`, `any`)
+   → the matching `slice.From(xs).ToXxx(fn)`. `error`/`any` are checked by
+   exact identity against `types.Universe.Lookup("error"/"any").Type()`
+   (NOT a structural "has one method"/"has zero methods" check) — this
+   correctly excludes a user-declared named error-like type or a
+   locally-declared empty interface from being misclassified as the
+   builtin `error`/`any` (verified via the `Marker` — a local empty
+   interface — testdata fixture, which correctly falls through to case 3
+   instead of `ToAny`).
+3. Otherwise (arbitrary struct/pointer/slice/etc.) → the standalone
+   `slice.Map(xs, fn)` — a bare function call, NOT a `slice.From(xs).`
+   chain continuation (`Map` isn't a `Mapper[T]` method).
+
+**Known limitation, not solved**: `rune` and `int32` are the literal same
+Go type (`rune` is a builtin alias for `int32`) — `go/types` cannot
+distinguish which spelling the source used. This detector always resolves
+to `ToInt32`, never `ToRune`. An inherent ambiguity in fluentfp's own API
+surface, not a bug in this detector.
+
+**Guide drift found this cycle (evidence for #65868, not fixed here)**:
+the originating task description, and `go-development-guide.md` line 1334,
+both describe a `Convert` method and a `slice.MapTo[R,T]`/`MapperTo[R,T]`
+mechanism. Neither exists in the current fluentfp source, verified
+directly against `~/projects/fluentfp/internal/base/mapper.go` and
+`~/projects/fluentfp/slice/map.go`:
+
+- The same-type method is **`Transform`** (`mapper.go:28`), not `Convert`
+  — `Convert` doesn't exist. Operator confirmed live: "we use transform
+  not convert any more."
+- The arbitrary-target mechanism is the **standalone function**
+  `slice.Map[T, R any](ts []T, fn func(T) R) Mapper[R]` (`slice/map.go:8`)
+  — `MapTo`/`MapperTo` do not exist anywhere in `slice/` or
+  `internal/base/` (zero grep hits).
+- The ~10 known-alias `ToXxx` methods ARE confirmed present exactly as
+  documented (`mapper.go` lines 383–483).
+
+This detector's diagnostics name the **verified-correct** method
+(`Transform`/`ToXxx`/`Map`), not the guide's stale wording. #65868 ("guide
+fluentfp-API drift... systematic pass verifying every fluentfp module
+table") already scopes a `slice` module audit — confirmed its scope
+covers this finding; this section is the concrete evidence for whoever
+picks that audit up, filed via `/grade r1` finding 6 discussion (jeeves
+tasks.jeeves interaction 66952).
 
 ## Integration points (documented, not wired up this cycle)
 
@@ -595,12 +704,12 @@ implemented.
 ## Verification performed (v2.1 cycle — `impurereach`, jeeves #65901)
 
 TDD red/green (khorikov-unit-testing-guide.md §9, required for new
-behavioral surface): `impurereach_test.go` + `testdata/src/a/a.go` (11
+behavioral surface): `impurereach_test.go` + `testdata/src/a/a.go` (12
 fixtures) and `testdata/src/b/b.go` were written and confirmed failing
 (`impurereach` package didn't exist yet) BEFORE `impurereach.go` was
 implemented.
 
-- `go test ./impurereach/...` — 11 golden fixtures covering: a 2-hop and a
+- `go test ./impurereach/...` — 12 golden fixtures covering: a 2-hop and a
   3-hop chain; self-recursion combined with a direct call (no diagnostic,
   no infinite loop); mutual recursion reaching an impure call (cycle
   safety + correct depth counting); an IIFE (anonymous closure propagates
@@ -609,12 +718,15 @@ implemented.
   interface-mediated call (interface-specific indeterminate wording, no
   propagation); the cross-package boundary (unflagged — structurally
   can't be otherwise); an allowlist-miss deep in a chain (unflagged); a
-  method as an intermediate hop (participates like a plain function); and
-  a builtin call (`println`, confirmed empirically to lower to a
-  `*ssa.Builtin` call — not flagged as indeterminate). One real bug found
-  and fixed during the first run (synthetic pointer-wrapper methods
-  causing double-reporting — see §v2.1 above); all fixtures green after
-  the fix.
+  method as an intermediate hop (participates like a plain function); a
+  builtin call (`println`, confirmed empirically to lower to a
+  `*ssa.Builtin` call — not flagged as indeterminate); and a bound method
+  value (added post-IMPL-grade, fixture #12 — a second, structurally
+  different synthetic-wrapper category, empirically confirming the
+  general `Synthetic != ""` exclusion policy). One real bug found and
+  fixed during the first run (synthetic pointer-wrapper methods causing
+  double-reporting — see §v2.1 above); all fixtures green after the fix,
+  and after the post-grade fixture addition.
 - `go test ./...` — full repo suite green (`filterloop`, `impuresource`,
   `nestedcall` all unaffected — confirms the `impuresource.ImpureFuncs`
   export rename caused no regression).
@@ -657,3 +769,36 @@ fixtures) BEFORE `nestedcall.go`'s real logic was implemented.
   documented the adjacent-pair (not whole-chain) uniform-commas scope
   choice explicitly in Design, added 5 AST edge-case fixtures, and
   broadened the false-positive verification beyond the two in-tree files.
+
+## Verification performed (v4 cycle — `mapshape`, jeeves #65781)
+
+TDD red/green: `mapshape_test.go` + `testdata/src/a/a.go` (12 fixtures)
+were written against a stub no-op `Analyzer` and confirmed failing (8
+missing-diagnostic failures, exactly matching the 8 positive `// want`
+lines) BEFORE `mapshape.go`'s real logic was implemented.
+
+- `go test ./mapshape/...` — all 12 golden fixtures pass on the first
+  real-logic implementation attempt: 8 positives (Transform, ToString,
+  ToInt, ToInt32, ToError, ToAny, arbitrary-struct/`slice.Map`, and the
+  `Marker`-empty-interface case correctly falling through to `slice.Map`
+  rather than `ToAny`) plus 4 negatives (identity copy-loop, `filterloop`'s
+  guard-if and continue-guard shapes correctly not double-firing,
+  multi-statement body).
+- Discrimination fixtures added per `/grade r1` finding 5: `int` vs
+  `int32` targets (adjacent `*types.Basic` kind-switch branches) and a
+  locally-declared empty interface vs the builtin `any` (adjacent
+  identity-check branches) — both confirm the classifier selects the
+  correct branch, not merely that some diagnostic fires at the right line.
+- `go build` / `go vet` / `go test` — scoped to `mapshape`,
+  `cmd/go-fp-lint`, `filterloop`, `impuresource`, `nestedcall`; all green.
+- One round of cross-vendor `/grade` (R1: A-, APPROVE) — findings absorbed:
+  specified the exact `error`/`any` detection mechanism (universe-identity
+  check, not structural) per finding 2, added the two discrimination
+  fixtures per finding 5, and confirmed #65868's scope covers this cycle's
+  guide-drift finding per finding 6 (see §v4 above). Process note: this
+  grade round ran after Implementation Gate bash had already published
+  contract/plan events (user invoked `/grade` mid-execution rather than
+  before `ExitPlanMode`, per normal 1d.5-then-gate ordering) — findings
+  were absorbed directly into the implementation rather than back into the
+  already-published plan file; logged as `/variance 65781` on
+  `tasks.jeeves`, not a scope or contract change.
