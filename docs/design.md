@@ -205,11 +205,11 @@ foundation); a Tier-B codemod fix may be layered on later.
 |---|---|---|---|
 | `filterloop` — filter shape → `KeepIf` | fluentfp | C | **Shipped v1** |
 | continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
-| `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: #65901 |
+| `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
 | chain line-layout (one-op-per-line / inline) | all three | **A** | formatter — #66031 |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
-| paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **#65783**; `change_me` fix deferred **#66034** |
-| double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | #65783 detector scope + #66034 |
+| paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
+| double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Convert`/`ToString` | fluentfp / go-dev | C | **#65781** |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
 | pointer receiver where value receiver works | go-dev | C | **#65784** (partial overlap `go vet copylocks`) |
@@ -401,6 +401,129 @@ migration risk it flagged: any future rewording of these diagnostics from
 compatibility change for anything that scrapes diagnostic text rather than
 analyzer IDs or structured (`-json`) output.
 
+## v2.1: `impurereach` (jeeves #65901)
+
+Fourth analyzer, new package `impurereach/`. Closes the gap #65900 punted:
+"function-value indirection, callbacks, interface-mediated calls ... natural
+territory for #65901's callgraph machinery" (§Feasibility resolution above).
+Normand: "actions are infectious" — a function that doesn't itself directly
+call an impure func, but *transitively* reaches one through local calls, is
+flagged; a separate, honestly-worded diagnostic covers calls that can't be
+resolved statically at all, rather than silently under-reporting or
+over-claiming impurity through them.
+
+**Scope boundaries (1b decisions, all recommended options)**:
+
+- **Intra-package only.** `buildssa.Analyzer` builds a *per-package*
+  `*ssa.Program` — imported packages are unbuilt stubs (no `Blocks`), so
+  `go/callgraph/static.CallGraph(prog)` structurally can't produce edges
+  through another package's function bodies. Cross-package propagation
+  needs `analysis.Fact` export/import — deferred, tracked as **#66810**.
+- **Dynamic dispatch gets a separate honest diagnostic**, not silence and
+  not conservative "assume impure." `go/ssa.CallCommon.StaticCallee()`
+  resolves direct calls and immediately-invoked closures (`*ssa.MakeClosure`
+  case); everything else (stored/passed closures, interface `invoke`-mode
+  calls) returns `nil` and gets `"call via function value — purity cannot
+  be determined"` or `"interface-dispatched call — purity cannot be
+  determined"`, independent of the transitive-seed set.
+- **Seed set is #65900's direct-impure-call allowlist only** (not also
+  package-var writes) — reused via export (`impuresource.ImpureFuncs`,
+  renamed from the unexported `impureFuncs`) rather than duplicated,
+  avoiding allowlist drift between the two analyzers.
+
+Value-derived-var taint tracking (`x := os.Getenv("X"); foo(x)`) is a
+materially different (dataflow/taint, not call-graph) mechanism, explicitly
+NOT attempted — deferred, tracked as **#66811**.
+
+**Algorithm**: `static.CallGraph(ssaInfo.Pkg.Prog)` builds the local call
+graph; seeds are nodes whose `Func.Object()` matches the allowlist (same
+`Recv() == nil` guard as `matchImpureCall`). A multi-source BFS from all
+seeds walks reverse edges (`Node.In`), tracking hop depth — cycles/recursion
+are handled for free by the visited-once BFS property, no separate SCC pass
+needed. **Depth ≥ 2 only**: depth-1 nodes are *direct* callers of the seed,
+already reported by `impuresource`'s direct-call diagnostic — reporting them
+again here would be duplicate and inaccurately worded ("transitively" when
+it's actually direct). Reports once per named source function at
+`Func.Pos()`; anonymous closures are never report *targets* (no clean
+name/position) but still propagate reachability correctly through the
+graph — an IIFE that directly calls an impure func makes its *enclosing
+named function* transitively impure (2-hop through the
+`MakeClosure`+immediate-`Call` static edge).
+
+**Found during 3b `/i` self-review**: `go/callgraph/static`'s `methodsOf()`
+synthesizes compiler-generated pointer-receiver wrapper methods (`(*T).M`
+calling through to the real value-receiver `T.M`) for every package-level
+non-interface type. These wrappers create a real static-call edge that was
+producing a spurious extra hop — a value-receiver method that directly
+calls an impure func (a depth-1 direct caller, correctly excluded) was
+*also* being reported via its own auto-generated wrapper's depth-2 edge,
+under the wrapper's shared source position (`ssa.Function.Synthetic`
+wrappers share position with the function they wrap). Fixed by excluding
+`Func.Synthetic != ""` from report targets.
+
+**Documented subtlety, not a bug**: a trivial non-branching closure
+binding (`f := time.Now; f()`, no address-of, no reassignment) can resolve
+`StaticCallee()` directly via SSA register-lifting — the indeterminate-call
+diagnostic's true boundary is narrower than "any variable holding a func
+value": only genuinely-unresolvable bindings (function parameters,
+struct/slice/map storage, branch-merged values) hit it. This is inherent to
+`StaticCallee()`'s definition (see `go/ssa`'s `CallCommon.StaticCallee`),
+not a gap in this analyzer.
+
+**Inherited limitations, not worked around**: generic package-level
+functions are a stated limitation of `go/callgraph/static` itself (its own
+doc comment excludes parameterized methods from `methodsOf`; plain generic
+functions have no special handling either) — out of this analyzer's scope
+to compensate for.
+
+## v3: `nestedcall` (jeeves #65783)
+
+Third analyzer, third package: `nestedcall/`. Detects two related
+call-nesting readability violations from fluentfp-guide.md /
+go-development-guide.md (duplicated verbatim in both — the rule is
+general-purpose Go guidance, not fluentfp-specific, so the analyzer has no
+import-gating, matching `filterloop`'s precedent of firing on shape alone):
+
+- **Paren-depth**: don't open more than two parens without closing (chain
+  depth via nested call-as-argument > 2).
+- **Uniform-commas**: only one nesting level may have multiple
+  (comma-separated) arguments.
+
+One package, two diagnostics, shared `*ast.CallExpr` traversal (mirrors how
+`filterloop` shares `appendAccIdent` across its two shapes) — this shape was
+an explicit operator choice over two separate analyzer packages.
+
+**Algorithm** (pure syntax, no type info): a pre-pass marks every CallExpr
+that appears literally inside another CallExpr's `Args` slice (NOT its
+`Fun`/receiver position — this is what correctly excludes method chains
+like `results.Sort(...).Take(n)`, and by extension func-returning-func
+shapes like `f()(x)`, from paren-depth counting). Paren-depth is then
+evaluated only at "root" calls (not marked nested-as-arg), via
+`depth(call) = 1 + max(depth(argCall) for CallExpr args, else 0)` — max, not
+sum, across sibling arguments, since only one nested chain is ever
+simultaneously open when reading left to right. Uniform-commas is evaluated
+independently at every CallExpr (root or nested): violated when a call has
+>1 arg AND at least one of its args is itself a CallExpr with >1 arg.
+
+**Deliberate scope narrowing — adjacent-pair, not whole-chain
+(`/grade r1` finding 2, jeeves #65783)**: the guide's prose ("only one level
+may have multiple arguments") reads as a whole-chain invariant, but all
+guide examples only exercise immediate parent/child pairs. This v1 ships
+the **adjacent-pair** interpretation: `f(g(h(a, b)), c)` (where `f` and `h`
+both have multiple args but their direct parent/child pairs don't) is NOT
+flagged. This is an intentional v1 choice, not an accidental narrowing; a
+whole-chain variant is a candidate follow-up if real-world false negatives
+surface.
+
+**Scope correction — double-map fusion split out**: `docs/design.md`'s
+roster previously listed "double-map fusion" as in-scope for #65783's
+detector; the originating task description and the prior session's
+`/pickup` handoff both scoped #65783 to paren-depth + uniform-commas only.
+Split to task **#66830** — confirmed at `/grade r1` finding 6 that the two
+checks have genuinely distinct violation conditions (same-aggregate-op
+composition vs. nesting-depth/comma-count metrics) and don't share
+meaningful implementation beyond the generic CallExpr walk.
+
 ## Integration points (documented, not wired up this cycle)
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
@@ -468,3 +591,69 @@ implemented.
   negative fixture, and scoped the cross-session coordination claim to
   "discharges this session's side" rather than implying conflict
   prevention.
+
+## Verification performed (v2.1 cycle — `impurereach`, jeeves #65901)
+
+TDD red/green (khorikov-unit-testing-guide.md §9, required for new
+behavioral surface): `impurereach_test.go` + `testdata/src/a/a.go` (11
+fixtures) and `testdata/src/b/b.go` were written and confirmed failing
+(`impurereach` package didn't exist yet) BEFORE `impurereach.go` was
+implemented.
+
+- `go test ./impurereach/...` — 11 golden fixtures covering: a 2-hop and a
+  3-hop chain; self-recursion combined with a direct call (no diagnostic,
+  no infinite loop); mutual recursion reaching an impure call (cycle
+  safety + correct depth counting); an IIFE (anonymous closure propagates
+  reachability to its enclosing named function); a function-value
+  parameter (indeterminate diagnostic, no propagation to the caller); an
+  interface-mediated call (interface-specific indeterminate wording, no
+  propagation); the cross-package boundary (unflagged — structurally
+  can't be otherwise); an allowlist-miss deep in a chain (unflagged); a
+  method as an intermediate hop (participates like a plain function); and
+  a builtin call (`println`, confirmed empirically to lower to a
+  `*ssa.Builtin` call — not flagged as indeterminate). One real bug found
+  and fixed during the first run (synthetic pointer-wrapper methods
+  causing double-reporting — see §v2.1 above); all fixtures green after
+  the fix.
+- `go test ./...` — full repo suite green (`filterloop`, `impuresource`,
+  `nestedcall` all unaffected — confirms the `impuresource.ImpureFuncs`
+  export rename caused no regression).
+- `go build ./...` / `go vet ./...` — zero findings.
+- Built binary smoke-tested against a real 3-function chain
+  (`inner`→`middle`→`outer`, `inner` directly calling `os.Getenv`) outside
+  the testdata tree — `inner` got `impuresource`'s direct-call diagnostic,
+  `middle` and `outer` both got `impurereach`'s transitive diagnostic, all
+  three analyzers (`filterloop`, `impuresource`, `impurereach`) and the
+  concurrently-shipped `nestedcall` registered and running together
+  correctly in the multichecker.
+
+## Verification performed (v3 cycle — `nestedcall`, jeeves #65783)
+
+TDD red/green (khorikov-unit-testing-guide.md, required for new behavioral
+surface): `nestedcall_test.go` + `testdata/src/a/a.go` (14 fixtures) were
+written against a stub no-op `Analyzer` and confirmed failing (5 missing-
+diagnostic failures, exactly matching the 3 `// want`-tagged positive
+fixtures) BEFORE `nestedcall.go`'s real logic was implemented.
+
+- `go test ./nestedcall/...` — all 14 golden fixtures pass on the first
+  real-logic implementation attempt: 3 positives (paren-depth,
+  uniform-commas, both-at-once) plus 11 negatives, including the 5 AST edge
+  cases added per `/grade r1` finding 7 (nested zero-arg calls,
+  func-returning-func, variadic spread, parenthesized callee, mixed
+  sibling-depth confirming max-not-sum aggregation).
+- `go build ./...` / `go vet ./...` / `go test ./...` — scoped to
+  `nestedcall`, `cmd/go-fp-lint`, `filterloop`, `impuresource` (excluding a
+  concurrently-in-progress sibling package in the shared tree); all green.
+- Built binary smoke-tested against `filterloop/filterloop.go` and
+  `impuresource/impuresource.go` — zero `nestedcall` false positives.
+- Broader false-positive corpus check (per `/grade r1` finding 4): built
+  binary run via `go vet -vettool=` against `~/projects/era`'s Go module (a
+  large, unrelated, real-world codebase) — both diagnostics fired at
+  multiple genuine nested-call sites (e.g. `codesearch.go`, `era.go`,
+  `storereporter.go`), with no crashes or obviously-wrong matches observed
+  on manual spot-check, giving reasonable confidence the detector doesn't
+  produce pathological noise on ordinary Go code outside this repo.
+- One round of cross-vendor `/grade` (R1: A-, APPROVE) — findings absorbed:
+  documented the adjacent-pair (not whole-chain) uniform-commas scope
+  choice explicitly in Design, added 5 AST edge-case fixtures, and
+  broadened the false-positive verification beyond the two in-tree files.
