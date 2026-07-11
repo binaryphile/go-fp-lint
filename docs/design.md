@@ -50,9 +50,45 @@ for _, u := range users {
 flagged as: *"for-loop filter shape — use `slice.From(xs).KeepIf(predicate)`
 instead"*.
 
-**Detection rule**: a `for range` loop whose body is exactly one `if`
-statement (no `else`, no `init`), whose body is exactly one assignment
-`acc = append(acc, ...)` where `acc` is the same identifier on both sides.
+**Detection rule (guard-if shape)**: a `for range` loop whose body is
+exactly one `if` statement (no `else`, no `init`), whose body is exactly
+one assignment `acc = append(acc, ...)` where `acc` is the same identifier
+on both sides.
+
+### v1.1: continue-guard shape (jeeves #65780)
+
+The early-`continue` equivalent of the guard-if shape is now also
+detected — same diagnostic, same KeepIf rewrite:
+
+```go
+var active []User
+for _, u := range users {
+    if !u.Active {
+        continue
+    }
+    active = append(active, u)
+}
+```
+
+**Detection rule (continue-guard shape)**: a `for range` loop whose body
+is exactly **two** statements — first an `if` (no `else`, no `init`) whose
+body is exactly one **unlabeled** `continue`, second an assignment
+`acc = append(acc, ...)` with `acc` the same identifier on both sides. The
+two shapes share the same `acc = append(acc, ...)` tail check
+(`appendAccIdent`); `matchFilterLoop` reports a match when either
+`ifGuardFilter` or `continueGuardFilter` holds.
+
+**Deliberately NOT flagged for the continue-guard shape** (verified via
+`testdata/src/a/a.go` fixtures):
+
+- **Side effect before the continue** (`if !cond { println(...); continue }`)
+  — the guard `if` body is then two statements; removing it in a KeepIf
+  rewrite would silently drop the side effect. Parallel to the
+  multi-statement guard-if negative.
+- **Labeled continue** (`continue outer`) — targets an enclosing loop, so
+  the loop is not a simple filter of its own range.
+- **Continue followed by a non-append** (e.g. `count += 1` reduction) — not
+  a slice-accumulator filter; a Fold/count, not a KeepIf.
 
 **Deliberately NOT flagged** (verified via `testdata/src/a/a.go` fixtures):
 
@@ -66,17 +102,22 @@ statement (no `else`, no `init`), whose body is exactly one assignment
   — no `if` guard at all) — this is `slice.From(xs).ToString(...)`, a
   different fluentfp method; a separate analyzer, not this one
 
-**Known limitation (false-negative)**: filter shapes using an early
-`continue` instead of a guarding `if` (`for _, u := range users { if
-!u.Active { continue }; active = append(active, u) }`) are not detected.
-Tracked as a roster item, not silently ignored.
+**Resolved limitation (was a false-negative)**: filter shapes using an
+early `continue` instead of a guarding `if` are now detected as of
+jeeves #65780 — see §v1.1 above.
+
+**Remaining known limitation**: the continue-guard detection requires
+`Init == nil` on the guard `if`, so a filter with an init clause
+(`if v, ok := seen[u]; ok { continue }`) is not flagged. This keeps the
+shape tight and parallel to the guard-if rule; extending to init-form
+guards is a possible future increment, not filed as a task.
 
 ## Roster (this cycle: 1 shipped, rest deferred/tracked)
 
 | Check | Guide | Status |
 |---|---|---|
 | `filterloop` — for-loop filter shape → `KeepIf` | fluentfp-guide.md | **Shipped v1** |
-| continue-guarded filter shape (false-negative above) | fluentfp-guide.md | Deferred — no task filed yet |
+| continue-guarded filter shape | fluentfp-guide.md | **Shipped v1.1** (jeeves #65780) |
 | map-loop shape → `Convert`/`ToString`/etc. | fluentfp-guide.md | Deferred — no task filed yet |
 | inline lambda inside fluentfp chain → named function/method ref | fluentfp-guide.md | Deferred — no task filed yet |
 | nested `slice.X(slice.Y(...))` paren-depth violation | fluentfp-guide.md | Deferred — no task filed yet |
