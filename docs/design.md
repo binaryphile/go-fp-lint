@@ -141,7 +141,14 @@ umbrella task (each has a different owner/repo: pre-commit hooks live
 per-repo, `/c` skill lives in `~/.claude/skills/`, gate-bash is a
 per-cycle plan-file convention).
 
-## Verification performed this cycle
+## Verification performed (v1 cycle)
+
+> v1.1 (continue-guard shape, jeeves #65780) added 3 fixtures — a positive
+> continue-guard case plus 2 adjacent negatives (labeled continue,
+> continue-then-reduce) and a side-effect-before-continue negative; the
+> golden-fixture suite is now 9 cases (2 positive, 7 negative). Same
+> `go test ./...` + `go vet ./...` + built-binary smoke-test gates, all
+> green. See §v1.1.
 
 - `go test ./...` — analysistest golden-fixture suite, 6 cases (1 positive
   match, 5 negative — else-partition, multi-statement body, sum-reduction,
