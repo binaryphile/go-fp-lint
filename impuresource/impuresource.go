@@ -23,10 +23,11 @@ var Analyzer = &analysis.Analyzer{
 	Run:  run,
 }
 
-// impureFuncs is the v1 allowlist, keyed by import path then func name.
+// ImpureFuncs is the v1 allowlist, keyed by import path then func name.
 // Intentionally incomplete — extending it is a code edit, not a runtime
-// flag (see docs/design.md).
-var impureFuncs = map[string]map[string]bool{
+// flag (see docs/design.md). Exported so impurereach can reuse it as the
+// seed set for transitive propagation without duplicating the allowlist.
+var ImpureFuncs = map[string]map[string]bool{
 	"time": {"Now": true},
 	"os":   {"Getenv": true},
 }
@@ -82,7 +83,7 @@ func matchImpureCall(pass *analysis.Pass, n ast.Node) (analysis.Diagnostic, bool
 	if !ok || sig.Recv() != nil {
 		return analysis.Diagnostic{}, false
 	}
-	if !impureFuncs[obj.Pkg().Path()][obj.Name()] {
+	if !ImpureFuncs[obj.Pkg().Path()][obj.Name()] {
 		return analysis.Diagnostic{}, false
 	}
 	return analysis.Diagnostic{
