@@ -37,42 +37,79 @@ func run(pass *analysis.Pass) (interface{}, error) {
 }
 
 // matchFilterLoop reports whether `stmt` is a filter-shaped for-range
-// loop: a single guard `if` (no else) whose body is exactly one
-// statement appending the range value (or key) to an accumulator
-// variable declared outside the loop. Returns the diagnostic to report
-// and true on a match.
+// loop and, when so, the diagnostic to report. Two shapes qualify, both
+// expressible as slice.From(xs).KeepIf(predicate):
+//
+//   - guard-if:       for _, u := range xs { if cond { acc = append(acc, u) } }
+//   - continue-guard: for _, u := range xs { if !cond { continue }; acc = append(acc, u) }
 func matchFilterLoop(stmt *ast.RangeStmt) (analysis.Diagnostic, bool) {
-	if len(stmt.Body.List) != 1 {
+	if !ifGuardFilter(stmt) && !continueGuardFilter(stmt) {
 		return analysis.Diagnostic{}, false
 	}
-
-	ifStmt, ok := stmt.Body.List[0].(*ast.IfStmt)
-	if !ok || ifStmt.Else != nil || ifStmt.Init != nil {
-		return analysis.Diagnostic{}, false
-	}
-	if len(ifStmt.Body.List) != 1 {
-		return analysis.Diagnostic{}, false
-	}
-
-	assign, ok := ifStmt.Body.List[0].(*ast.AssignStmt)
-	if !ok || assign.Tok != token.ASSIGN || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
-		return analysis.Diagnostic{}, false
-	}
-
-	accIdent, ok := assign.Lhs[0].(*ast.Ident)
-	if !ok {
-		return analysis.Diagnostic{}, false
-	}
-
-	call, ok := assign.Rhs[0].(*ast.CallExpr)
-	if !ok || !isAppendOf(call, accIdent) {
-		return analysis.Diagnostic{}, false
-	}
-
 	return analysis.Diagnostic{
 		Pos:     stmt.Pos(),
 		Message: "for-loop filter shape — use slice.From(xs).KeepIf(predicate) instead (see fluentfp-guide.md)",
 	}, true
+}
+
+// ifGuardFilter reports whether `stmt`'s body is exactly one guard `if`
+// (no else, no init) whose body is exactly one `acc = append(acc, ...)`
+// assignment — the classic filter shape.
+func ifGuardFilter(stmt *ast.RangeStmt) bool {
+	if len(stmt.Body.List) != 1 {
+		return false
+	}
+	ifStmt, ok := stmt.Body.List[0].(*ast.IfStmt)
+	if !ok || ifStmt.Else != nil || ifStmt.Init != nil {
+		return false
+	}
+	if len(ifStmt.Body.List) != 1 {
+		return false
+	}
+	_, ok = appendAccIdent(ifStmt.Body.List[0])
+	return ok
+}
+
+// continueGuardFilter reports whether `stmt`'s body is exactly two
+// statements: an `if <cond> { continue }` guard (unlabeled continue, no
+// else, no init) followed by a single `acc = append(acc, ...)`
+// assignment — the early-continue equivalent of the classic filter shape.
+func continueGuardFilter(stmt *ast.RangeStmt) bool {
+	if len(stmt.Body.List) != 2 {
+		return false
+	}
+	ifStmt, ok := stmt.Body.List[0].(*ast.IfStmt)
+	if !ok || ifStmt.Else != nil || ifStmt.Init != nil {
+		return false
+	}
+	if len(ifStmt.Body.List) != 1 {
+		return false
+	}
+	branch, ok := ifStmt.Body.List[0].(*ast.BranchStmt)
+	if !ok || branch.Tok != token.CONTINUE || branch.Label != nil {
+		return false
+	}
+	_, ok = appendAccIdent(stmt.Body.List[1])
+	return ok
+}
+
+// appendAccIdent returns the accumulator identifier when `stmt` is an
+// assignment `acc = append(acc, ...)` with the same identifier `acc` on
+// both sides, and true. Both filter shapes share this tail.
+func appendAccIdent(stmt ast.Stmt) (*ast.Ident, bool) {
+	assign, ok := stmt.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.ASSIGN || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return nil, false
+	}
+	accIdent, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	call, ok := assign.Rhs[0].(*ast.CallExpr)
+	if !ok || !isAppendOf(call, accIdent) {
+		return nil, false
+	}
+	return accIdent, true
 }
 
 // isAppendOf reports whether `call` is `append(acc, ...)` for the given
