@@ -124,7 +124,7 @@ guards is a possible future increment, not filed as a task.
 | pointer receiver where value receiver would work | go-development-guide.md | Deferred — no task filed yet |
 | internal mock detection (design smell) | go-development-guide.md | Deferred — no task filed yet |
 | slice/map field mutation without `Clone()` | go-development-guide.md | Deferred — no task filed yet |
-| hidden actions in ostensibly-pure functions | functional-programming-unified-guide.md | Feasibility resolved by split (jeeves #65787) — see §Feasibility resolution below; direct-call detection tracked as jeeves #65900, transitive propagation as jeeves #65901 |
+| hidden actions in ostensibly-pure functions | functional-programming-unified-guide.md | Feasibility resolved by split (jeeves #65787) — direct-call + package-var-touch detection **Shipped v2** (jeeves #65900, `impuresource`; see §v2 below); transitive propagation tracked as jeeves #65901 |
 | `option.Basic`/`option.Option` API drift check | fluentfp API vs go-development-guide.md | Deferred — no task filed yet |
 
 Each deferred item needs its own `evtctl task` filed against `tasks.jeeves`
@@ -205,6 +205,89 @@ emit normative diagnostics derived from an undocumented intent
 heuristic**, since a user disputing the finding has no contract to point
 to.
 
+## v2: `impuresource` (jeeves #65900)
+
+Ships the direct-detection half of the Feasibility resolution above: one
+combined `go/analysis.Analyzer` reporting (a) direct calls to an
+allowlisted impure-func set and (b) classified touches of the analyzed
+package's own package-scope vars. Both checks resolve identifiers via
+`pass.TypesInfo.Uses` — stable across import aliases and dot-imports — and
+stay within the "action inventory, not hidden-action detector" framing
+established above: diagnostics report observed syntactic facts ("direct
+call to os.Getenv," "write to package-scope var X"), never intentionality
+or contract violation.
+
+**Direct-call detection** (`matchImpureCall`): resolves `call.Fun` to a
+`*types.Func`, requires `sig.Recv() == nil` to exclude methods, and looks
+up `(obj.Pkg().Path(), obj.Name())` against the allowlist below. Keying by
+import path (not display name) keeps matching stable across aliases and
+dot-imports; the diagnostic displays the short package name
+(`obj.Pkg().Name()`) for readability. Only matches calls whose callee
+resolves to a `*types.Func` — a function-valued variable
+(`f := time.Now; f()`) resolves to a `*types.Var` instead and is out of
+scope by construction, not a missed case of "every syntactically direct
+call" (confirmed via cross-vendor `/grade` R1 probe 1).
+
+Allowlist v1 (same intentional-incompleteness posture as the Feasibility
+resolution above):
+
+| Import path | Func |
+|---|---|
+| `time` | `Now` |
+| `os` | `Getenv` |
+
+**Package-var-touch detection** (`matchPackageVarTouch` + `classifyUse`):
+identifies package-scope vars of the analyzed package via
+`obj.Pkg() == pass.Pkg && obj.Parent() == pass.Pkg.Scope()` (own package
+only — an imported package's exported vars are out of scope, verified by
+a cross-package negative fixture), then classifies each use by its
+**immediate** AST-ancestor node (a manual stack maintained over
+`ast.Inspect`'s push/pop callback):
+
+| Immediate parent | Classification |
+|---|---|
+| `*ast.UnaryExpr` with `Op == token.AND` | address-of |
+| `*ast.IncDecStmt` | compound-assign |
+| `*ast.AssignStmt`, compound-assign token (`+=`, etc.), ident in `Lhs` | compound-assign |
+| `*ast.AssignStmt`, `Tok == token.ASSIGN`, ident in `Lhs` | write |
+| anything else (Rhs, call arg, selector/index base, condition, ...) | read (default) |
+
+**Documented limitation — selector-chain boundary**: classification only
+inspects the identifier's *immediate* parent, not deeper into a selector
+chain. `globalConfig.Name = "x"` classifies the base identifier
+`globalConfig` as **read of**, not a field-level write, because its
+immediate parent is the `*ast.SelectorExpr`, not the enclosing
+`*ast.AssignStmt`. This is a stated boundary (tested by a fixture, see
+§Verification below), not a silent mis-label — deeper selector-chain
+write-precision is a possible future increment, not filed as a task.
+
+**Explicitly out of scope for v2** (same boundaries the Feasibility
+resolution already drew): function-value indirection, callbacks,
+interface-mediated calls, impure-result-derived vars (#65901's
+SSA/dataflow territory); imported-package exported-var touches (own-package
+only, stated non-goal); a `Calculate*`/`Compute*` naming heuristic (already
+rejected above); CLI-configurable allowlist (zero-config, matches
+`filterloop`'s precedent — extending the allowlist is a one-line code
+edit).
+
+**Relationship to the `//fp:calc` marker proposal (jeeves #66086)**: a
+design proposal to add a machine-read purity-marker convention surfaced
+mid-cycle (would upgrade this analyzer's diagnostics from an informational
+action-inventory into a normative purity-contract check for marked
+functions). Deliberately NOT adopted this cycle — the guide-side
+convention doesn't exist yet, and a first draft of it was independently
+sent back on cross-vendor grade as unsound in the higher-order fluentfp
+domain (a marker on a combinator can't establish its function-value/
+interface/generic callbacks are pure without an effect system). #65900
+ships in its informational form; #66086 is now scoped as a further-out
+"effect-lite design" cycle (define the purity boundary + first-order
+subset + conditionally-pure combinator effect signatures), not a
+near-term guide convention. If #66086 ever lands, note the forward
+migration risk it flagged: any future rewording of these diagnostics from
+"direct call to X" to a contract-violation phrasing is an observable
+compatibility change for anything that scrapes diagnostic text rather than
+analyzer IDs or structured (`-json`) output.
+
 ## Integration points (documented, not wired up this cycle)
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
@@ -224,6 +307,9 @@ per-cycle plan-file convention).
 > golden-fixture suite is now 9 cases (2 positive, 7 negative). Same
 > `go test ./...` + `go vet ./...` + built-binary smoke-test gates, all
 > green. See §v1.1.
+>
+> v2 (`impuresource`, jeeves #65900) shipped as a second analyzer — see
+> below.
 
 - `go test ./...` — analysistest golden-fixture suite, 6 cases (1 positive
   match, 5 negative — else-partition, multi-statement body, sum-reduction,
@@ -240,3 +326,29 @@ per-cycle plan-file convention).
   own `nix develop` completes cleanly once the evaluation slowdown is
   understood — may just need a first fetch to complete outside a
   time-constrained session.
+
+## Verification performed (v2 cycle — `impuresource`, jeeves #65900)
+
+TDD red/green (khorikov-unit-testing-guide.md §9, required for new
+behavioral surface): `impuresource_test.go` + all `testdata/src/a/*.go`
+and `testdata/src/b/b.go` fixtures were written and confirmed failing
+(`impuresource` package didn't exist yet) BEFORE `impuresource.go` was
+implemented.
+
+- `go test ./impuresource/...` — analysistest golden-fixture suite, 16
+  cases (9 positive: 4 call-detection shapes covering regular/aliased/
+  dot-imports, 5 var-touch classifications covering all four verbs;
+  7 negative: method-shadow, name-shadow, local-scope, cross-package,
+  allowlist-miss, selector-chain-boundary, const-vs-var) all correct.
+- `go test ./...` — full repo suite green, `filterloop` unaffected.
+- `go vet ./...` — zero findings on the repo's own code.
+- Built binary (`multichecker.Main(filterloop.Analyzer, impuresource.Analyzer)`)
+  smoke-tested against a real snippet containing a filter-loop shape, a
+  package-var increment, and an `os.Getenv` call — all three diagnostics
+  fired at the correct lines, both analyzers running together correctly.
+- Two rounds of cross-vendor `/grade` (R1: A-, APPROVE; R2: A, APPROVE) —
+  findings absorbed: narrowed "direct call" wording to "resolved function
+  calls" (not "every syntactically direct call"), added the const-vs-var
+  negative fixture, and scoped the cross-session coordination claim to
+  "discharges this session's side" rather than implying conflict
+  prevention.

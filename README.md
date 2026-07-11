@@ -23,7 +23,14 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-v1 ships exactly one analyzer (`filterloop` — detects for-loop filter
-shapes that `slice.From(xs).KeepIf(predicate)` expresses more directly).
+Two analyzers ship today:
+
+- `filterloop` — detects for-loop filter shapes that
+  `slice.From(xs).KeepIf(predicate)` expresses more directly.
+- `impuresource` — reports direct calls to an allowlisted impure-func set
+  and classified touches (read/write/address-of/compound-assign) of a
+  package's own package-scope vars (an action inventory, not a
+  hidden-action detector).
+
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.
