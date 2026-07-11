@@ -124,11 +124,86 @@ guards is a possible future increment, not filed as a task.
 | pointer receiver where value receiver would work | go-development-guide.md | Deferred — no task filed yet |
 | internal mock detection (design smell) | go-development-guide.md | Deferred — no task filed yet |
 | slice/map field mutation without `Clone()` | go-development-guide.md | Deferred — no task filed yet |
-| hidden actions in ostensibly-pure functions | functional-programming-unified-guide.md | Deferred — explicitly flagged in the originating task as possibly "too semantic for static analysis"; needs its own design pass before a task is even worth filing |
+| hidden actions in ostensibly-pure functions | functional-programming-unified-guide.md | Feasibility resolved by split (jeeves #65787) — see §Feasibility resolution below; direct-call detection tracked as jeeves #65900, transitive propagation as jeeves #65901 |
 | `option.Basic`/`option.Option` API drift check | fluentfp API vs go-development-guide.md | Deferred — no task filed yet |
 
 Each deferred item needs its own `evtctl task` filed against `tasks.jeeves`
 before pickup (not done in this cycle — see the closeout for this arc).
+
+### Feasibility resolution: hidden actions in ostensibly-pure functions (jeeves #65787)
+
+**Tractable, scoped to syntactically direct references** (jeeves #65900):
+`pass.TypesInfo.Uses`/`Defs` resolves an identifier or a call's callee to
+its `types.Object`, which is stable across import aliases and
+dot-imports. This detects two things, each narrower than it may first
+sound:
+
+- **Direct calls** written as `pkg.Func(...)` (or via an alias/dot-import)
+  where `Func` matches an allowlist. Initial list: `time.Now`,
+  `os.Getenv`; the list is **allowlist-defined and intentionally
+  incomplete** — `time.Since`, `time.After`, `os.LookupEnv`,
+  `crypto/rand`, filesystem/network calls, logging, sync/channel ops, and
+  mutable globals in *dependency* packages are deliberately out of scope
+  for #65900's first cut and left as follow-up list-expansion, not a
+  blocker.
+- **Direct package-scope-var touches**, own package only for v1 (imported
+  packages' exported globals are a stated non-goal — flagging every read
+  of another package's var produces noise without a scope story yet).
+  Object resolution alone only proves an identifier denotes a
+  package-scope `*types.Var`; distinguishing read vs write vs
+  address-taken vs compound-assignment requires inspecting the AST use
+  context (parent node — is the identifier the LHS of an assignment,
+  operand of `&`, etc.). #65900's implementation must specify this
+  classification explicitly; it does not fall out of `TypesInfo` for
+  free.
+
+**Explicitly out of scope for #65900** (a stated boundary, not an
+oversight): function-value indirection (`now := time.Now; now()`),
+callbacks/higher-order dispatch, interface-mediated calls, and variables
+initialized from an impure call's result. These need SSA/dataflow
+analysis — natural territory for #65901's callgraph machinery to extend
+into later, not something #65900 attempts.
+
+Given these limits, #65900 is a **direct-impurity-source detector /
+action inventory**, not a "hidden action" or "purity violation" detector
+— it reports "this function directly calls X" or "directly touches
+package-var Y," and nothing stronger. It cannot establish that a call was
+*hidden* or violated an intended-Calculation contract, since (below) no
+such contract is declared anywhere in the corpus. Diagnostics are worded
+accordingly ("direct call to os.Getenv," not "this Calculation is
+impure").
+
+**Sequenced after, not hard-blocked by, #65900** (jeeves #65901,
+transitive/callgraph propagation — Normand: "actions are infectious"):
+`go/analysis/passes/buildssa` + `go/callgraph` are already available
+transitively via the existing `golang.org/x/tools` dependency, no new
+deps needed. #65901 needs a seed set of impure functions to propagate
+from; #65900's allowlist-matching is a natural, reusable seed source, so
+building #65901 second avoids duplicating that logic — but #65901 does
+not technically *require* #65900 to have shipped, since a minimal seed
+list could be inlined directly. Filed as **Deferred (tracked)**, pure
+discretionary, sequenced-after #65900.
+
+**Not tractable under the current corpus/contracts**: "should have been
+marked pure but wasn't." Grepped `go-development-guide.md`,
+`fluentfp-guide.md`, and `fluentfp-conversion-guide.md` for any
+naming/comment/directive convention that declares a function's intended
+purity — none exists. This is not a claim that the question is
+undecidable in principle — a future annotation, naming contract, or
+generated manifest could supply the missing oracle — only that no such
+oracle exists *today* to check against. Rejected (not deferred)
+until/unless the guide corpus adopts one; introducing that convention is
+a guide-authoring design decision, out of go-fp-lint's scope.
+
+Also rejected: a `Calculate*`/`Compute*` naming-heuristic proxy — not for
+being infeasible to implement (it's trivially implementable), but because
+it would manufacture an unwritten policy inside the linter rather than
+check a documented one. The applicable principle isn't filterloop's
+"no silent transform on ambiguous shapes" (that precedent concerns
+automatic rewrites, not diagnostics) — it's more directly: **do not
+emit normative diagnostics derived from an undocumented intent
+heuristic**, since a user disputing the finding has no contract to point
+to.
 
 ## Integration points (documented, not wired up this cycle)
 
