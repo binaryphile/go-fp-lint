@@ -206,7 +206,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | `filterloop` — filter shape → `KeepIf` | fluentfp | C | **Shipped v1** |
 | continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
 | `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
-| chain line-layout (one-op-per-line / inline) | all three | **A** | formatter — #66031 |
+| chain line-layout (one-op-per-line / inline) | all three | **A** | formatter — #66031 (spec'd, unbuilt — see §"Tier-A spec: chain line-layout") |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
@@ -307,6 +307,65 @@ automatic rewrites, not diagnostics) — it's more directly: **do not
 emit normative diagnostics derived from an undocumented intent
 heuristic**, since a user disputing the finding has no contract to point
 to.
+
+## Tier-A spec: chain line-layout (`chainlayout`, #66031)
+
+Not yet built. This section specifies the rule the `chainlayout` pass will
+enforce so the roster row above (`chain line-layout (one-op-per-line / inline)`)
+resolves to a concrete contract rather than a one-line summary. The
+authoritative WHAT lives in `fluentfp-guide.md §"Chain Formatting"`; per the
+guide-division doctrine above (**shrink lags ship**) the rule stays in the guide
+until this pass ships, at which point the guide's mechanical "how" may shrink to
+a pointer here.
+
+**What the rule governs.** A *fluent chain* is a value produced by a fluentfp
+setup constructor (`slice.From(...)`, `slice.Map[R](...)`, `option.Of(...)`, and
+siblings) followed by one or more chained method calls on the resulting fluent
+value. The rule constrains only the *line layout* of such a chain — it is
+deterministic, name-free, and semantics-preserving (Tier A).
+
+**Counted operations.** Only the chained method calls count. The setup
+constructor (`slice.From`, `slice.Map[R]`, `option.Of`, …) is a non-counted
+bookend — it establishes the fluent value but is not itself a chained operation.
+Every method call *after* setup counts, **including a terminal `ToX` / `Len` /
+etc. call** — the terminal call is NOT exempt (in the single-operation example
+below, the one counted op *is* the terminal `.ToString(...)`).
+
+**Two layout forms:**
+
+- **One counted operation → inline.** The whole chain on a single line:
+
+  ```go
+  names := slice.From(users).ToString(User.Name)
+  ```
+
+- **Two or more counted operations → one per line, trailing dot.** The setup
+  call keeps the first `.` as a trailing dot; each counted method call sits on
+  its own line, indented one level deeper than the statement, and every line
+  ends in the trailing `.` except the terminal call:
+
+  ```go
+  count := slice.From(tickets).
+      KeepIf(completedAfterCutoff).
+      Len()
+  ```
+
+  Indentation is gofmt's (tabs); the rule fixes chain *structure* (line breaks +
+  trailing-dot placement), not column counts — the result is run through gofmt.
+
+**A violation** is any fluent chain whose actual line layout does not match the
+form its counted-operation count selects: a two-plus-op chain written inline (or
+split with leading rather than trailing dots), or a single-op chain split across
+lines.
+
+**Realization (mirrors the sibling passes).** Scoped as a `go/analysis` detector
+in a new `chainlayout/` package, mirroring `filterloop/`, `mapshape/`,
+`recvshape/`: one `chainlayout.go` + `testdata/src/...` fixtures carrying
+`// want` comments + a thin `chainlayout_test.go` driving `analysistest.Run`. It
+*reports* violating chains (diagnostic); an always-on rewriting `SuggestedFix`
+(true gofmt-class formatter behavior) is a compatible later layer, not required
+for the detector. The detector yields an independently re-runnable oracle:
+`go test ./chainlayout/...`.
 
 ## v2: `impuresource` (jeeves #65900)
 
