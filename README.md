@@ -23,14 +23,20 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-Two analyzers ship today:
+Seven analyzers ship today (see `docs/design.md` §vN for each; §Roster for
+the full tiered plan):
 
-- `filterloop` — detects for-loop filter shapes that
+- `filterloop` — for-loop filter shapes that
   `slice.From(xs).KeepIf(predicate)` expresses more directly.
-- `impuresource` — reports direct calls to an allowlisted impure-func set
-  and classified touches (read/write/address-of/compound-assign) of a
-  package's own package-scope vars (an action inventory, not a
-  hidden-action detector).
+- `impuresource` — direct impure-call + package-var touch inventory.
+- `impurereach` — transitive reach into impure sources.
+- `nestedcall` — paren-depth / uniform-comma nested-call shapes.
+- `mapshape` — map-loop shapes that `Transform`/`ToXxx`/`Map` express.
+- `recvshape` — pointer receivers that could be value receivers
+  (go-development-guide.md §3).
+- `aliaswrite` — value-receiver methods that mutate a slice/map field's
+  shared backing when the type has no `Clone()` method
+  (go-development-guide.md §11 Slice Aliasing Trap).
 
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.

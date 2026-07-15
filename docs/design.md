@@ -214,7 +214,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
 | pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
 | internal mock detection (design smell) | go-dev | C | **#65785** |
-| slice/map field mutation without `Clone()` | go-dev | C | **#65786** (aliasing — undecidable; scope tight) |
+| slice/map field mutation without `Clone()` | go-dev | C | **Shipped v6** (`aliaswrite`, #65786; aliasing undecidable — tight conservative scope, see §v6) |
 | `option.Basic` / `option.Option` API drift | fluentfp / go-dev | C (rename → B) | no analyzer task yet |
 
 Deferred / optional (tracked): `change_me` extraction substrate **#66034**, LLM
@@ -791,6 +791,45 @@ and identified the limitations above as the accepted scope boundary rather
 than oversights; all findings were absorbed into the plan before
 implementation (jeeves tasks.jeeves interactions 67060–67062).
 
+## v6: `aliaswrite` (jeeves #65786)
+
+Sixth analyzer, sixth package: `aliaswrite/`. Detects the **Slice Aliasing
+Trap** (go-development-guide.md §11): value-copying a struct copies slice/map
+headers but shares the backing array/map, so mutating that backing through a
+value-receiver method silently corrupts every other copy.
+
+**Detection** — a method is flagged when ALL hold:
+
+1. **Value receiver**, named (not `_`) — a pointer receiver shares the pointer
+   deliberately, so mutation is intended, not the trap; a blank receiver has no
+   identifier to trace.
+2. **Receiver type has no `Clone()` method** (checked over the pointer method
+   set, so a value- or pointer-receiver `Clone` both count). Presence of
+   `Clone()` is the task heuristic that the aliasing is handled — exempt.
+3. The body **mutates a slice/map field's shared backing** in one of three
+   shapes: index-assignment `r.f[i] = x`; map `delete(r.f, k)`; or
+   **reslice-append** `r.f = append(r.f[lo:hi], …)` (the guide's flagship
+   dangerous pattern — first `append` arg is a `SliceExpr` over the field).
+
+**Deliberately NOT flagged** (guide §11 "when Clone NOT required"): plain
+append-only `r.f = append(r.f, x)` (first arg is the whole field, no reslice —
+grows without corrupting a shared prefix); read-only access; scalar-field
+assignment `r.f = x` (mutates only the local copy); mutation of a local slice.
+
+**Undecidability + scope (roster note).** Whole-program aliasing is undecidable;
+`aliaswrite` is a syntactic, conservative, single-method detector that
+**favors false-negatives over false-positives** (the repo precedent — see
+`recvshape`). It does not do escape/reachability analysis, cross-method flow,
+or interprocedural tracing. Generic receiver types are skipped (v1 scope,
+matching `recvshape`). The `Clone()`-presence exemption is a heuristic: a type
+can have `Clone()` yet a method still mutate without calling it — accepted as
+the tight-scope boundary, not an oversight.
+
+**Structure** mirrors `recvshape/`: `aliaswrite.go` (receiver iteration +
+`sliceOrMapField`/`isResliceAppend`/`isBuiltin` helpers) + `testdata/src/a/a.go`
+(`// want` fixtures) + `aliaswrite_test.go` (`analysistest.Run`). Wired into
+`cmd/go-fp-lint`'s `multichecker.Main`.
+
 ## Integration points (documented, not wired up this cycle)
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
@@ -1031,3 +1070,28 @@ exemption) was implemented.
   the interface-exclusion gap, and added the composition + lock-adversarial-matrix
   fixtures — all reflected in §v5's Known limitations above (jeeves
   tasks.jeeves interactions 67060–67062).
+
+## Verification performed (v6 cycle — `aliaswrite`, jeeves #65786)
+
+TDD red/green (REQUIRED for new behavioral surface per khorikov-unit-testing-guide.md):
+`aliaswrite_test.go` + `testdata/src/a/a.go` were authored first — 4 positive
+`// want`-tagged fixtures (slice index-assign, map index-assign, map `delete`,
+reslice-append) and 7 implicit negatives (pointer receiver, `Clone`-bearing
+type, append-only, read-only, scalar field, local slice, plus the whole-file
+`analysistest` no-unexpected-diagnostic guarantee).
+
+- `go test ./aliaswrite/` — all 4 positives flagged and every negative silent
+  on the first real-logic implementation. Negative coverage is the design's
+  scope boundary made executable: `PointerRecv` (pointer receiver skipped),
+  `HasClone` (Clone-presence exemption), `AppendOnly` (append-only is not a
+  reslice → guide §11 "Clone NOT required"), `ReadOnly` (no mutation),
+  `ScalarField` (non-slice/map field), `LocalSlice` (mutation of a local, not a
+  receiver field).
+- `go build ./cmd/go-fp-lint` — the analyzer is wired into `multichecker.Main`
+  as the 7th analyzer; builds clean.
+- `go test ./...` / `go vet ./aliaswrite/` — full repo (7 analyzer packages +
+  `cmd`) green; vet clean.
+- **Non-contradiction with `recvshape`/`copylocks`**: `aliaswrite` examines only
+  **value-receiver** methods (skips `*ast.StarExpr` receivers), while `recvshape`
+  examines only pointer-receiver methods — disjoint method sets by construction,
+  no double-flag. `copylocks` polices lock-copying, an orthogonal concern.
