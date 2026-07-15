@@ -211,7 +211,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
-| inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **#65782** |
+| inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **Shipped v7** (`chainlambda`, #65782; type-resolved fluentfp receiver, see §v7) |
 | pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
 | internal mock detection (design smell) | go-dev | C | **#65785** |
 | slice/map field mutation without `Clone()` | go-dev | C | **Shipped v6** (`aliaswrite`, #65786; aliasing undecidable — tight conservative scope, see §v6) |
@@ -830,6 +830,35 @@ the tight-scope boundary, not an oversight.
 (`// want` fixtures) + `aliaswrite_test.go` (`analysistest.Run`). Wired into
 `cmd/go-fp-lint`'s `multichecker.Main`.
 
+## v7: `chainlambda` (jeeves #65782)
+
+Seventh analyzer, seventh package: `chainlambda/`. Detects an inline function
+literal passed directly as an argument to a **fluentfp chain method**
+(`KeepIf`, `RemoveIf`, `ToString`, …) — fluentfp-guide.md prefers a named
+function or method expression, which reads better in a chain. Residual to the
+method-expression codemod (#66032); this is the syntactic detector half.
+
+**Detection** — a `CallExpr` whose `Fun` is a `SelectorExpr` (method call) is
+flagged when: (1) the method identifier resolves via `pass.TypesInfo.Uses` to a
+`*types.Func` whose **defining package path contains `binaryphile/fluentfp`**
+(type-resolved, NOT a method-name guess — so a same-named method on a
+non-fluentfp type is not a false positive); and (2) any argument is an
+`*ast.FuncLit`. Each offending `FuncLit` arg is reported at its own position.
+
+**NOT flagged**: named function / method-expression arguments (the fix); inline
+lambdas passed to non-fluentfp methods; lambdas that are not chain-method
+arguments (plain assignment, etc.).
+
+**Testdata note.** Type-resolution needs the receiver's package to actually be
+fluentfp, so `testdata/src/github.com/binaryphile/fluentfp/slice/slice.go`
+stubs a minimal `Mapper[T]` + a few higher-order methods; `analysistest`'s
+GOPATH-mode testdata resolves the nested import path. This is the pattern for
+any analyzer keyed on a specific external package's identity.
+
+**Structure** mirrors the other analyzers: `chainlambda.go` +
+`testdata/src/a/a.go` (`// want` fixtures) + `chainlambda_test.go`. Wired into
+`multichecker.Main` (8th analyzer).
+
 ## Integration points (documented, not wired up this cycle)
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
@@ -1095,3 +1124,20 @@ type, append-only, read-only, scalar field, local slice, plus the whole-file
   **value-receiver** methods (skips `*ast.StarExpr` receivers), while `recvshape`
   examines only pointer-receiver methods — disjoint method sets by construction,
   no double-flag. `copylocks` polices lock-copying, an orthogonal concern.
+
+## Verification performed (v7 cycle — `chainlambda`, jeeves #65782)
+
+TDD red/green (REQUIRED per khorikov-unit-testing-guide.md): authored first were
+`chainlambda_test.go`, `testdata/src/a/a.go` (3 positive `// want` fixtures:
+lambda→`KeepIf`, `ToString`, `RemoveIf`), and a stub fluentfp package
+(`testdata/src/github.com/binaryphile/fluentfp/slice/slice.go`).
+
+- `go test ./chainlambda/` — 3 positives flagged, 4 negatives silent
+  (named-func `KeepIf`/`ToString`, inline lambda on a non-fluentfp method, a
+  non-argument lambda) on the first real-logic run. The stub-fluentfp testdata
+  package resolved under `analysistest`'s GOPATH mode without extra setup.
+- `go build ./cmd/go-fp-lint` — wired as the 8th analyzer; builds clean.
+- `go test ./...` (8 analyzer packages + `cmd`) / `go vet ./chainlambda/` — green.
+- **Type-resolution, not name-guessing**: the fluentfp check is on the resolved
+  method's `Pkg().Path()`, so `Other.Do(func...)` (a same-shaped call on a
+  non-fluentfp type) is correctly NOT flagged — verified by the `Neg3` fixture.
