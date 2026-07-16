@@ -206,7 +206,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | `filterloop` — filter shape → `KeepIf` | fluentfp | C | **Shipped v1** |
 | continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
 | `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
-| chain line-layout (one-op-per-line / inline) | all three | **A** | formatter — #66031 (spec'd, unbuilt — see §"Tier-A spec: chain line-layout") |
+| chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; setup-constructor-rooted, types-resolved — see §"Tier-A spec: chain line-layout"). Rewriting `SuggestedFix` + guide-shrink deferred (arc #71278→#71279→#71280); var/return-rooted #71302 |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
@@ -310,13 +310,20 @@ to.
 
 ## Tier-A spec: chain line-layout (`chainlayout`, #66031)
 
-Not yet built. This section specifies the rule the `chainlayout` pass will
-enforce so the roster row above (`chain line-layout (one-op-per-line / inline)`)
-resolves to a concrete contract rather than a one-line summary. The
-authoritative WHAT lives in `fluentfp-guide.md §"Chain Formatting"`; per the
-guide-division doctrine above (**shrink lags ship**) the rule stays in the guide
-until this pass ships, at which point the guide's mechanical "how" may shrink to
-a pointer here.
+**Shipped v8** (jeeves #66031). This section specifies the rule the `chainlayout`
+pass enforces. The authoritative WHAT lives in `fluentfp-guide.md §"Chain
+Formatting"`; per the guide-division doctrine above (**shrink lags ship**) the
+rule stays in the guide until the pass runs automatically in-workflow — that
+shrink is the tail of the sequenced arc (jeeves #71278 install → #71279 wire →
+#71280 shrink), NOT this cycle.
+
+**v1 enforceable claim (scope).** chainlayout enforces layout **only for chains
+rooted at an inline, qualifying fluentfp setup constructor**. Variable-rooted
+(`m := slice.From(xs); m.A().B()`), function-return-rooted (`getM().A().B()`), and
+dot-imported (`import . ".../slice"`) chains are **out of the v1 claim** (tracked
+jeeves #71302) — import spelling is load-bearing despite the types-resolved
+identity. Detector only; an always-on rewriting `SuggestedFix` is a compatible
+later layer, not shipped here.
 
 **What the rule governs.** A *fluent chain* is a value produced by a fluentfp
 setup constructor (`slice.From(...)`, `slice.Map[R](...)`, `option.Of(...)`, and
@@ -358,14 +365,30 @@ form its counted-operation count selects: a two-plus-op chain written inline (or
 split with leading rather than trailing dots), or a single-op chain split across
 lines.
 
-**Realization (mirrors the sibling passes).** Scoped as a `go/analysis` detector
-in a new `chainlayout/` package, mirroring `filterloop/`, `mapshape/`,
-`recvshape/`: one `chainlayout.go` + `testdata/src/...` fixtures carrying
-`// want` comments + a thin `chainlayout_test.go` driving `analysistest.Run`. It
-*reports* violating chains (diagnostic); an always-on rewriting `SuggestedFix`
-(true gofmt-class formatter behavior) is a compatible later layer, not required
-for the detector. The detector yields an independently re-runnable oracle:
-`go test ./chainlayout/...`.
+**Realization (mirrors the sibling passes).** A `go/analysis` detector in
+`chainlayout/`, mirroring `filterloop/`, `mapshape/`, `recvshape/`: one
+`chainlayout.go` + `testdata/src/...` fixtures carrying `// want` comments + a
+thin `chainlayout_test.go` driving `analysistest.Run`. It *reports* violating
+chains (diagnostic). Key decisions (earned over the R1–R3 adversarial grade):
+
+- **Chain identity is types-resolved.** `walkChain` walks the right-nested
+  `CallExpr` receiver spine; `calleeSelector` unwraps `*ast.ParenExpr` /
+  `*ast.IndexExpr` / `*ast.IndexListExpr` so a **generic instantiated** setup
+  constructor (`slice.Map[R](xs)`) is not silently skipped (R1 F5). A method
+  (`Signature().Recv()!=nil`) is a counted op; a package func is the setup
+  bookend **only if it has exactly one result whose type — after
+  `types.Unalias` + pointer-strip — is a `*types.Named` defined under fluentfp**
+  (R1 F6 / R2 F2), nil-guarding `Obj().Pkg()` against universe types. Package
+  membership is the org-qualified `isFluentfpPath` predicate (segment-exact,
+  shared with the method-identity check).
+- **Layout metric = the source line of each method-name identifier**
+  (`Fset.Position(sel.Sel.Pos()).Line`), NOT the call's `End()` — so a single-op
+  chain whose argument is a multi-line lambda is not a false split. One op →
+  `setupLine == opLine`; ≥2 ops → `[setupLine, opLines...]` strictly increasing.
+
+An always-on rewriting `SuggestedFix` (gofmt-class formatter behavior) is a
+compatible later layer, not shipped here. The detector yields an independently
+re-runnable oracle: `go test ./chainlayout/...`.
 
 ## v2: `impuresource` (jeeves #65900)
 
@@ -1141,3 +1164,34 @@ lambda→`KeepIf`, `ToString`, `RemoveIf`), and a stub fluentfp package
 - **Type-resolution, not name-guessing**: the fluentfp check is on the resolved
   method's `Pkg().Path()`, so `Other.Do(func...)` (a same-shaped call on a
   non-fluentfp type) is correctly NOT flagged — verified by the `Neg3` fixture.
+
+## Verification performed (v8 cycle — `chainlayout`, jeeves #66031)
+
+TDD red/green (REQUIRED per khorikov-unit-testing-guide.md): authored first were
+`chainlayout_test.go`, `testdata/src/a/a.go`, and the stub fluentfp `slice`
+package (extending chainlambda's with `Len`, `Map[T,R]`). First run was RED (no
+non-test Go files); GREEN on the first real-logic implementation.
+
+- `go test ./chainlayout/` — **6 positives flagged, 7 negatives silent** on the
+  first real-logic run. Positives: 2-op inline, 3-op inline, 2-op partially
+  collapsed, single-op split, generic-setup (`slice.Map[int,string]`,
+  `IndexListExpr`) inline, parenthesized generic setup (`(slice.Map[...])(xs)`).
+  Negatives (the scope boundary made executable): single-op inline, 2-op correct
+  trailing-dot, **single-op inline with a multi-line lambda arg** (the method-name
+  line metric, not the call `End()`, prevents the false split), generic-setup
+  (`slice.From[int]`, `IndexExpr`) correctly formatted, non-fluentfp chain,
+  **variable-rooted chain** (v1-skip, #71302), bare setup call (0 ops).
+- `go build ./cmd/go-fp-lint` — wired as the **9th** analyzer; builds clean.
+- `go test ./...` (9 analyzer packages + `cmd`) / `go vet ./chainlayout/` — green;
+  fixtures gofmt-clean (gofmt preserves chain line-breaks, so layout violations
+  survive formatting — the realistic case).
+- **Cross-vendor adversarial grade (R1 B → R2 B+ → R3 B+, plateau-on-novelty
+  exit).** R1 caught a load-bearing false-negative: a generic instantiated setup
+  (`slice.Map[R]`) has an `*ast.IndexExpr`/`IndexListExpr` callee, not a bare
+  `*ast.SelectorExpr` — `calleeSelector` now unwraps it (proven by the
+  `PosGenericInline`/`PosParenGeneric` fixtures). R2/R3 hardened the
+  setup-result-type recognizer (single-result, `types.Unalias`+pointer-strip,
+  nil-guarded universe types, org-qualified path predicate).
+- **No double-flag with `chainlambda`**: orthogonal concerns (lambda-as-argument
+  vs chain line-layout); running the 9-analyzer binary on the repo's own
+  (non-fluentfp) code emits zero `chainlayout` diagnostics.

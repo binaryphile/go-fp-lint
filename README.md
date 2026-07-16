@@ -23,7 +23,7 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-Eight analyzers ship today (see `docs/design.md` §vN for each; §Roster for
+Nine analyzers ship today (see `docs/design.md` §vN for each; §Roster for
 the full tiered plan):
 
 - `filterloop` — for-loop filter shapes that
@@ -39,6 +39,9 @@ the full tiered plan):
   (go-development-guide.md §11 Slice Aliasing Trap).
 - `chainlambda` — inline lambdas passed to a fluentfp chain method; prefer a
   named function or method expression (fluentfp-guide.md).
+- `chainlayout` — fluentfp chain line-layout: single-op chains inline, multi-op
+  one-per-line with trailing dots (fluentfp-guide.md §Chain Formatting; Tier-A
+  detector, setup-constructor-rooted).
 
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.
