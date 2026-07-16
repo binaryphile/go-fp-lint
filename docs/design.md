@@ -187,8 +187,9 @@ purity-declaration convention exists in the corpus. A normative upgrade needs a
 declared-purity marker; the naive `//fp:calc` comment-marker was found unsound
 in this higher-order library (grade #66086 R1, D+; era `bab8e36b72eb`) — the
 viable form is a bounded effect-system (define the Calculation purity boundary;
-a first-order subset; conditionally-pure combinator effect signatures), tracked
-as the deferred design **#66155**, gating enforcement **#66086**.
+a first-order subset; conditionally-pure combinator effect signatures), **designed
+in §"Effect-lite purity design (#66155)" below** (cross-vendor graded A−,
+2026-07-16), gating enforcement **#66086**.
 
 **Generality (open, N=1).** The format/lint *split* is well-precedented — bash's
 `shfmt` + shellcheck-convention-plugin is the same division, and is why
@@ -307,6 +308,119 @@ automatic rewrites, not diagnostics) — it's more directly: **do not
 emit normative diagnostics derived from an undocumented intent
 heuristic**, since a user disputing the finding has no contract to point
 to.
+
+## Effect-lite purity design (#66155)
+
+The bounded effect-system that would let `//fp:calc`-marked functions be checked
+*normatively* (upgrading `impuresource`/`impurereach` from informational to a
+purity contract for marked funcs). Design cross-vendor graded **A−** (R1 C+ → R2
+B+ → R3 A−, 2026-07-16); gates enforcement **#66086**. Two operator decisions
+shape it: **`go/ssa` pulled forward** (real provenance/escape, fail-closed) and a
+**lean coverage floor** (measure first, build only on a demonstrated win). This is
+a *design*; the Stage-1 build is separate future work.
+
+**The contract `//fp:calc` certifies.** A **deterministic, effect-clean, PARTIAL,
+race-free-snapshot** computation — NOT referentially-transparent, NOT total:
+
+- return values are determined solely by the values and reachable state supplied
+  at evaluation, under a **race-free/snapshot** assumption (reads through
+  pointer/slice/map args can vary under concurrent mutation);
+- no Action and no caller-visible mutation (boundary below);
+- **may panic** (deterministic in inputs); panic is *outside* the certified
+  property — a `//fp:calc` call is NOT "substitutable by its value" (that is a
+  future `//fp:total`).
+
+Purity is an **effect attribute over a resolved call graph**, three-valued:
+`pure` (PROVEN) / `impure` (proven Action/mutation) / `unknown` (unmarked or
+not-certifiable). **`unknown ≠ impure`.** The checker only **refutes** a false
+`//fp:calc` or **conservative-rejects** an un-provable one; it never infers purity
+for unmarked code.
+
+**Calculation boundary — reject-by-default.** `f` is `pure` iff it does NONE of
+the following; every ambiguous case is impure-or-reject:
+
+| Effect | v1 verdict |
+|---|---|
+| I/O; `os.*`; logging; clock/rand/env; channels/`go`/`sync`/atomics | impure |
+| **Read** of mutable package/global state (direct or via SSA-traced alias) | impure |
+| **Capability escape** of mutable-global/arg-reachable state — return, store (incl. channel send), copy, or closure-capture a reference (`&global`, global/arg-backed slice/map, closure over a mutable global) | impure |
+| Mutate arg-reachable state / receiver / package-global / any captured variable | impure |
+| `range` over a map in marked code | **reject (all, v1)** — order-insensitive exception deferred until a normatively-enumerated, mechanically-recognized order-independent op set exists (float accumulation does NOT qualify) |
+| Reflection / `unsafe` / `//go:linkname` / finalizers | reject |
+| Read of an **immutable** global — **`const` only in v1** | pure |
+| Local mutation of a value SSA-proven **local-fresh and non-escaping** | pure |
+
+**Resolved subset + SCC-safe recursion.** `//fp:calc` is certifiable only if every
+call edge resolves to a known-attribute callee (direct → marked / TCB /
+in-package-certifiable; inline literal whose body certifies; conditionally-pure
+combinator whose callbacks resolve pure). Un-resolvable edges (opaque func-value
+params, interface dispatch, non-singular method values, generic-parameter method
+calls, escaping closures) → **conservative-reject**. Certification is a
+**fixpoint over SCCs seeded pessimistically**: an SCC is `pure` only if every
+external edge is proven pure and every member body has no intrinsic
+Action/mutation/escape — no circular-assumption acceptance. Chains are **expression
+effects** (join of each call's obligation; no "method on a pure constructor's
+result is pure" inference).
+
+**Conditionally-pure effect signatures with return provenance.** HO combinators
+carry effect signatures AND return provenance, not booleans: `slice.From : pure,
+returns aliases-arg_0`; `Mapper.KeepIf/Transform/…: pure iff callback pure,
+returns fresh`; `Mapper.Len : pure`; side-effecting/concurrent/random combinators
+(`Each`, `PEach`, `PKeepIf`, `Shuffle`, `Sample`, `Samples`) are **impure**.
+Return provenance is a small vocabulary — `fresh` / `aliases-global` /
+`aliases-arg_i` (index set, transitive through wrappers/aggregates) / `unknown`;
+"caller-owned iff arg_i caller-owned" is **derived from `aliases-arg_i`** by the
+SSA pass, not a separate hand-audited category. This closes the capability-escape
+re-entry through an audited function returning global storage.
+
+**Provenance/mutation via `go/ssa`.** A `buildssa` + conservative
+points-to/provenance pass (available via `golang.org/x/tools`) decides per-SSA-value
+**origin** (local-fresh / arg / receiver / global-derived) and **escape** (flow to
+return / outward store incl. channel send / closure capture / deferred-closure
+execution). Provenance propagates **transitively** through interface box/unbox,
+aggregate fields, map/slice elements, pointer indirection, closures, phi/conversion;
+**any loss of component provenance → `unknown` → reject.** Fail-closed: an
+un-boundable value rejects certification. Sound per-package without whole-program
+analysis because every interprocedural edge is discharged by an analyzed body or an
+audited signature, else rejects — missing whole-program knowledge costs *coverage,
+not soundness*.
+
+**TCB as version-bound trusted root.** Entries bind to an **exact module
+path+version / audited source digest**; a fluentfp version mismatch is a hard **"TCB
+stale" gate that invalidates certification** (fail closed). Each conditional entry
+requires a source audit (allocation aliasing, mutation, panic, randomness,
+concurrency, global reads, return provenance).
+
+**Viability gate — lean coverage floor + corpus census.** Stage 1 ships
+**inventory-only** and runs a **corpus census** (per callback site / candidate
+calculation: certifiable / intrinsically-impure / rejected-by-reason). The floor is
+**lean** (operator-set, deliberately low): build Stage 2 only on a clear win over
+the shipped inventory, else Path B stays the product.
+
+**Cliff mitigation — bounded call-site certification.** Unmarked = unknown ⇒ no
+cliff for unmarked code. A **call-site/expression certification** reports a specific
+chain/callback effect-clean while the enclosing func stays `unknown`, with a bounded
+claim: "evaluating THIS expression, after its inputs are evaluated, under the §0
+assumptions, introduces no Action through its resolved expression graph" — NOT the
+inputs' construction, surrounding statements, later alias use, or the enclosing
+function. A `-why` frontier lists the minimal funcs to mark and distinguishes "one
+annotation away" from "blocked behind N dynamic edges."
+
+**Staged delivery.** (1) this design → operator approval [done]; (2) **Stage 1** —
+resolved direct/in-package + inline literals, SCC-safe fixpoint, exact-version TCB
+with return provenance, `go/ssa` provenance pass, reject-by-default, run
+inventory-only + corpus census, no assertion failures; (3) **Stage 2** — HO
+signatures to cross the lean floor + enable refutation, only if the floor is met;
+(4) **Stage 3 (optional)** — `//fp:total`; a closed-world "never-written package
+var" immutable-read model (absence of syntactic writes ≠ immutability — covers
+init, alias-writes, reflection/unsafe, generated + linked code).
+
+**Release criteria — adversarial negative fixtures.** Each must refute or reject,
+**none may certify**: mutually-recursive assertions; global read via alias; `return
+&global` / global-backed slice / closure over a global; shallow copy containing
+pointers then descendant mutation; method-value/interface/generic callback;
+map-order-dependent return; `Shuffle`/`Sample`/`PKeepIf` in a marked chain;
+stale-TCB run; an SSA value whose escape can't be bounded.
 
 ## Tier-A spec: chain line-layout (`chainlayout`, #66031)
 
