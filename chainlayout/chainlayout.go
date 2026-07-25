@@ -4,18 +4,25 @@
 // setup constructor alone on the first line. It is the Tier-A (Format) member of
 // the go-fp-lint roster (docs/design.md §"Tier-A spec: chain line-layout").
 //
-// A fluent chain is a value produced by a fluentfp SETUP CONSTRUCTOR
-// (slice.From, slice.Map[R], option.Of, …) followed by chained method calls.
-// Only the chained methods count; the setup is a non-counted bookend and the
-// terminal ToX/Len call counts. Identity is resolved through go/types, not
-// method-name guessing.
+// A fluent chain is a value produced by a fluentfp CHAIN ROOT followed by
+// chained method calls. Only the chained methods count; the root is a
+// non-counted bookend and the terminal ToX/Len call counts. Identity is
+// resolved through go/types, not method-name guessing.
 //
-// v1 enforceable claim: chainlayout enforces layout ONLY for chains rooted at an
-// inline, qualifying fluentfp setup constructor. Variable-rooted
-// (m := slice.From(xs); m.A().B()), function-return-rooted (getM().A().B()), and
-// dot-imported (import . ".../slice") chains are OUT of the v1 claim (tracked in
-// jeeves #71302) — import spelling is load-bearing despite the types-resolved
-// identity. Detector only; an always-on rewriting SuggestedFix is a later layer.
+// A chain root is either an inline, qualifying fluentfp setup constructor
+// (slice.From, slice.Map[R], option.Of, …), OR — as of v2 (jeeves #71302) — any
+// other expression whose static type is itself a named fluentfp type:
+// variable-rooted (m := slice.From(xs); m.A().B()) and function-return-rooted
+// (getM().A().B(), where getM's OWN return type is fluentfp even though getM
+// itself is not defined in the fluentfp module). The root's line is the
+// method-name identifier's line when the root is itself a selector call
+// (setup-constructor- or qualified-return-rooted), or the root expression's own
+// end position otherwise (variable-rooted, or a bare-identifier-called return
+// root) — see rootLine.
+//
+// v2 remaining exclusion: dot-imported (import . ".../slice") chains — import
+// spelling is load-bearing despite the types-resolved identity. Detector only;
+// an always-on rewriting SuggestedFix is a later layer.
 package chainlayout
 
 import (
@@ -49,26 +56,27 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if !ok || handled[call] {
 				return true
 			}
-			ops, setup, spine, ok := walkChain(pass, call)
+			ops, root, spine, ok := walkChain(pass, call)
 			if !ok {
 				return true
 			}
 			for _, c := range spine {
 				handled[c] = true // inner spine nodes: don't re-process as their own chain
 			}
-			reportChain(pass, setup, ops, call)
+			reportChain(pass, root, ops, call)
 			return true // keep descending: independent chains may live in argument subtrees
 		})
 	}
 	return nil, nil
 }
 
-// walkChain classifies outer as the outermost call of a fluentfp chain rooted at
-// an inline setup constructor. It returns the counted method-call ops
-// (outermost-first), the setup call, and every CallExpr on the receiver spine
-// (for handled-marking). ok is false when outer is not the outermost call of such
-// a chain — not fluentfp, or variable/return-rooted (v1 skip, jeeves #71302).
-func walkChain(pass *analysis.Pass, outer *ast.CallExpr) (ops []*ast.CallExpr, setup *ast.CallExpr, spine []*ast.CallExpr, ok bool) {
+// walkChain classifies outer as the outermost call of a fluentfp chain. It
+// returns the counted method-call ops (outermost-first), the chain root (an
+// inline setup-constructor call, or — v2, jeeves #71302 — any other expression
+// whose static type is itself fluentfp), and every CallExpr on the receiver
+// spine (for handled-marking). ok is false when outer is not the outermost call
+// of such a chain (not fluentfp, or dot-imported — the remaining v2 exclusion).
+func walkChain(pass *analysis.Pass, outer *ast.CallExpr) (ops []*ast.CallExpr, root ast.Expr, spine []*ast.CallExpr, ok bool) {
 	cur := outer
 	for {
 		sel := calleeSelector(cur)
@@ -80,22 +88,48 @@ func walkChain(pass *analysis.Pass, outer *ast.CallExpr) (ops []*ast.CallExpr, s
 			return nil, nil, nil, false
 		}
 		spine = append(spine, cur)
-		if hasReceiver(fn) {
-			ops = append(ops, cur)
-			inner, ok := sel.X.(*ast.CallExpr)
-			if !ok {
-				return nil, nil, nil, false // reached a variable/return receiver — v1 skip
+		if !hasReceiver(fn) {
+			// Package func: qualifies as a root bookend only if it constructs a
+			// fluentfp chain value (guards against rooting at an unrelated
+			// helper).
+			if !returnsFluentfpChain(fn) {
+				return nil, nil, nil, false
 			}
-			cur = inner
+			return ops, cur, spine, true
+		}
+		ops = append(ops, cur)
+		if spineContinues(pass, sel.X) {
+			cur = sel.X.(*ast.CallExpr)
 			continue
 		}
-		// Package func: qualifies as a setup bookend only if it constructs a
-		// fluentfp chain value (guards against rooting at an unrelated helper).
-		if !returnsFluentfpChain(fn) {
+		// sel.X does not continue the fluentfp call spine — accept it as the
+		// generalized chain root (variable-rooted, or return-rooted via a
+		// function whose OWN return type is fluentfp even though the function
+		// itself isn't defined in the fluentfp module; jeeves #71302) when its
+		// static type is itself fluentfp; otherwise this isn't a fluentfp chain
+		// at all.
+		if !exprIsFluentfpTyped(pass, sel.X) {
 			return nil, nil, nil, false
 		}
-		return ops, cur, spine, true
+		return ops, sel.X, spine, true
 	}
+}
+
+// spineContinues reports whether expr is itself a CallExpr on the fluentfp
+// spine (its callee resolves to a fluentfp-defined func) — i.e. whether
+// walkChain should keep descending into expr rather than treat expr as the
+// chain root.
+func spineContinues(pass *analysis.Pass, expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel := calleeSelector(call)
+	if sel == nil {
+		return false
+	}
+	_, ok = fluentfpFunc(pass, sel.Sel)
+	return ok
 }
 
 // calleeSelector returns call's callee selector, unwrapping parentheses and the
@@ -136,26 +170,44 @@ func hasReceiver(fn *types.Func) bool {
 	return ok && sig.Recv() != nil
 }
 
-// returnsFluentfpChain reports whether fn has exactly one result whose type,
-// after unwrapping alias and pointer, is a named type defined under fluentfp.
+// returnsFluentfpChain reports whether fn has exactly one result whose type is
+// itself a named type defined under fluentfp.
 func returnsFluentfpChain(fn *types.Func) bool {
 	sig, ok := fn.Type().(*types.Signature)
 	if !ok || sig.Results().Len() != 1 {
 		return false
 	}
-	t := types.Unalias(sig.Results().At(0).Type())
+	return namedFluentfpType(sig.Results().At(0).Type()) != nil
+}
+
+// exprIsFluentfpTyped reports whether expr's static type is itself a named type
+// defined under fluentfp — the generalized chain-root test that subsumes
+// setup-constructor rooting (jeeves #71302: variable- and function-return-rooted
+// chains).
+func exprIsFluentfpTyped(pass *analysis.Pass, expr ast.Expr) bool {
+	t := pass.TypesInfo.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+	return namedFluentfpType(t) != nil
+}
+
+// namedFluentfpType unwraps alias and pointer and returns t's underlying named
+// type when that type is defined under the fluentfp module; nil otherwise.
+func namedFluentfpType(t types.Type) *types.Named {
+	t = types.Unalias(t)
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = types.Unalias(ptr.Elem())
 	}
 	named, ok := t.(*types.Named)
 	if !ok {
-		return false
+		return nil
 	}
 	obj := named.Obj()
-	if obj == nil || obj.Pkg() == nil {
-		return false
+	if obj == nil || obj.Pkg() == nil || !isFluentfpPath(obj.Pkg().Path()) {
+		return nil
 	}
-	return isFluentfpPath(obj.Pkg().Path())
+	return named
 }
 
 // isFluentfpPath reports whether importPath is the fluentfp module or a package
@@ -164,11 +216,25 @@ func isFluentfpPath(importPath string) bool {
 	return importPath == fluentfpPath || strings.HasPrefix(importPath, fluentfpPath+"/")
 }
 
+// rootLine returns the source line used as root's layout-metric position: the
+// method-name identifier's line when root is itself a selector call
+// (setup-constructor-rooted, or return-rooted via a qualified call), or the
+// root expression's own end position otherwise (variable-rooted, or
+// return-rooted via a bare-identifier call) — jeeves #71302.
+func rootLine(pass *analysis.Pass, root ast.Expr) int {
+	if call, ok := root.(*ast.CallExpr); ok {
+		if sel := calleeSelector(call); sel != nil {
+			return pass.Fset.Position(sel.Sel.Pos()).Line
+		}
+	}
+	return pass.Fset.Position(root.End()).Line
+}
+
 // reportChain emits a diagnostic when the chain's line layout disagrees with the
 // form its counted-operation count selects. The layout metric is the source line
 // of each method-name identifier (not the call's End), so a multi-line argument
 // (e.g. an inline lambda) never triggers a false split/collapse.
-func reportChain(pass *analysis.Pass, setup *ast.CallExpr, ops []*ast.CallExpr, outer *ast.CallExpr) {
+func reportChain(pass *analysis.Pass, root ast.Expr, ops []*ast.CallExpr, outer *ast.CallExpr) {
 	count := len(ops)
 	if count == 0 {
 		return // bare setup call — nothing to enforce
@@ -176,18 +242,18 @@ func reportChain(pass *analysis.Pass, setup *ast.CallExpr, ops []*ast.CallExpr, 
 	line := func(c *ast.CallExpr) int {
 		return pass.Fset.Position(calleeSelector(c).Sel.Pos()).Line
 	}
-	setupLine := line(setup)
+	rootLn := rootLine(pass, root)
 	opLines := make([]int, count) // source order (ops were collected outermost-first)
 	for i, c := range ops {
 		opLines[count-1-i] = line(c)
 	}
 	if count == 1 {
-		if setupLine != opLines[0] {
+		if rootLn != opLines[0] {
 			pass.ReportRangef(outer, msgSingleOp)
 		}
 		return
 	}
-	prev := setupLine
+	prev := rootLn
 	for _, l := range opLines {
 		if l <= prev {
 			pass.ReportRangef(outer, msgMultiOp, count)

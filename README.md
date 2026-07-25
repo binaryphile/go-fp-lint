@@ -41,7 +41,8 @@ the full tiered plan):
   named function or method expression (fluentfp-guide.md).
 - `chainlayout` — fluentfp chain line-layout: single-op chains inline, multi-op
   one-per-line with trailing dots (fluentfp-guide.md §Chain Formatting; Tier-A
-  detector, setup-constructor-rooted).
+  detector, setup-constructor- or variable/return-rooted via generalized
+  static-type root detection).
 - `internalmock` — `Mock<X>` types whose target `<X>` is defined within the
   same module (a design smell — extract pure domain logic instead), vs. a
   real inter-system boundary mock (go-development-guide.md §6).

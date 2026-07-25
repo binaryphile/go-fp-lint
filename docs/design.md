@@ -207,7 +207,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | `filterloop` — filter shape → `KeepIf` | fluentfp | C | **Shipped v1** |
 | continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
 | `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
-| chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; setup-constructor-rooted, types-resolved — see §"Tier-A spec: chain line-layout"). Rewriting `SuggestedFix` + guide-shrink deferred (arc #71278→#71279→#71280); var/return-rooted #71302 |
+| chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; types-resolved — see §"Tier-A spec: chain line-layout"). Arc CLOSED: #71278 install → #71279 gate-bash wire → #71280 guide-shrink, all shipped. Root coverage extended v1→v2 (**Shipped**, jeeves #71302): variable-rooted and function-return-rooted chains now enforced via generalized static-type root detection, not just setup-constructor-rooted. Remaining exclusion: dot-imported chains. Rewriting `SuggestedFix` not shipped |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
@@ -431,13 +431,19 @@ rule stays in the guide until the pass runs automatically in-workflow — that
 shrink is the tail of the sequenced arc (jeeves #71278 install → #71279 wire →
 #71280 shrink), NOT this cycle.
 
-**v1 enforceable claim (scope).** chainlayout enforces layout **only for chains
-rooted at an inline, qualifying fluentfp setup constructor**. Variable-rooted
-(`m := slice.From(xs); m.A().B()`), function-return-rooted (`getM().A().B()`), and
-dot-imported (`import . ".../slice"`) chains are **out of the v1 claim** (tracked
-jeeves #71302) — import spelling is load-bearing despite the types-resolved
-identity. Detector only; an always-on rewriting `SuggestedFix` is a compatible
-later layer, not shipped here.
+**v2 enforceable claim (scope; extended from v1 by jeeves #71302).** chainlayout
+enforces layout for chains rooted at an inline, qualifying fluentfp setup
+constructor **OR** any other expression whose static type is itself a named
+fluentfp type — this generalization brings variable-rooted
+(`m := slice.From(xs); m.A().B()`) and function-return-rooted (`getM().A().B()`,
+where `getM`'s own return type is fluentfp even though `getM` itself is not
+defined in the fluentfp module) chains into scope. **v1** covered only the
+setup-constructor-rooted case; the v1→v2 gap was surfaced by grader #66031 R1 F7
+("an arbitrarily long chain assigned to a var evades the layout rule entirely")
+and left as tracked follow-up rather than blocking v1's ship. **Remaining
+exclusion**: dot-imported (`import . ".../slice"`) chains — import spelling is
+load-bearing despite the types-resolved identity. Detector only; an always-on
+rewriting `SuggestedFix` is a compatible later layer, not shipped here.
 
 **What the rule governs.** A *fluent chain* is a value produced by a fluentfp
 setup constructor (`slice.From(...)`, `slice.Map[R](...)`, `option.Of(...)`, and
@@ -1377,3 +1383,39 @@ files); GREEN on the first real-logic implementation.
   calls) — no new violation class introduced, consistent with the #66086/
   #66155-gated "informational inventory, not yet enforced" status noted in the
   roster table above.
+
+## Verification performed (v10 cycle — `chainlayout` v1→v2 root generalization, jeeves #71302)
+
+Self-triggered: jeeves #71280 (the guide-shrink that replaced the mechanical
+Chain Formatting spec with a bare "enforced automatically" pointer) activated
+this task's own stated trigger ("the guide-shrink needing full coverage to be
+safe") — a shrunk guide claiming full automatic enforcement while chainlayout
+v1 silently skipped variable- and function-return-rooted chains would have
+been a real teaching/enforcement gap, not just a missed detector case.
+
+Refactor, not new-behavioral-surface from scratch: `walkChain`'s descent logic
+was restructured to peek (`spineContinues`) before descending, falling back to
+a generalized static-type root test (`exprIsFluentfpTyped` / `namedFluentfpType`)
+when the receiver doesn't continue the fluentfp call spine. `returnsFluentfpChain`
+was refactored to share `namedFluentfpType` rather than duplicate the
+unwrap-alias/pointer/named/package-path logic inline (DRY).
+
+- `chainlayout/testdata/src/a/a.go`: the pre-existing `NegVarRooted` fixture
+  (documented as "out of the v1 claim, silent") was FLIPPED to `PosVarRooted`
+  with a `// want` tag — v2 now flags it. Added `NegVarRootedCorrect` (correct
+  one-per-line var-rooted, silent), `NegVarRootedSingle` (single-op var-rooted
+  inline, correct, silent), `PosReturnRooted` (new: a locally-defined `getMapper`
+  whose OWN return type is fluentfp — 2 ops inline, flagged), and
+  `NegReturnRootedCorrect` (correctly formatted, silent).
+- `go test ./chainlayout/` — green on the FIRST run after the refactor (no
+  red/green churn needed — existing fixtures for the setup-constructor-rooted
+  path continued to pass unchanged, confirming `rootLine`'s selector-call
+  fast path preserves v1's exact prior line-metric behavior byte-for-byte).
+- `go build ./cmd/go-fp-lint` / `go test ./...` (10 analyzer packages + `cmd`)
+  / `go vet ./...` / `go fmt ./...` — all green, no formatting drift.
+- Ran the rebuilt binary (`go-fp-lint -impuresource=false -impurereach=false
+  ./...`, the same invocation jeeves #71279 wired into the tandem Completion
+  Gate) against the whole repo — clean, rc=0, confirming the v2 chainlayout
+  change doesn't self-trip the gate it now participates in.
+- **No new v1-claim regression**: dot-imported chains remain the one
+  documented exclusion (unchanged, not addressed this cycle).

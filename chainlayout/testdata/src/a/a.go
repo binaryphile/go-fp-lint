@@ -79,11 +79,40 @@ func (o Other) B() int   { return 0 }
 
 func NegNonFluent() int { return Other{}.A().B() }
 
-// Variable-rooted fluentfp chain — out of the v1 claim (setup-constructor-rooted
-// only); the executable form of the documented limitation (#71302).
-func NegVarRooted(xs []int) int {
+// Variable-rooted fluentfp chain, two operations inline — v2 now enforces this
+// (#71302: generalized chain root via static type, not just setup constructors).
+func PosVarRooted(xs []int) int {
 	m := slice.From(xs)
-	return m.KeepIf(namedPred).Len()
+	return m.KeepIf(namedPred).Len() // want "fluentfp chain with 2 operations should be one per line"
+}
+
+// Variable-rooted, correctly formatted one-per-line — silent.
+func NegVarRootedCorrect(xs []int) int {
+	m := slice.From(xs)
+	return m.
+		KeepIf(namedPred).
+		Len()
+}
+
+// Variable-rooted, single operation inline — correct form, silent.
+func NegVarRootedSingle(xs []int) []string {
+	m := slice.From(xs)
+	return m.ToString(namedConv)
+}
+
+// getMapper's OWN return type is fluentfp even though getMapper itself is not
+// defined in the fluentfp module — function-return-rooted, two ops inline.
+func getMapper(xs []int) slice.Mapper[int] { return slice.From(xs) }
+
+func PosReturnRooted(xs []int) int {
+	return getMapper(xs).KeepIf(namedPred).Len() // want "fluentfp chain with 2 operations should be one per line"
+}
+
+// Return-rooted, correctly formatted one-per-line — silent.
+func NegReturnRootedCorrect(xs []int) int {
+	return getMapper(xs).
+		KeepIf(namedPred).
+		Len()
 }
 
 // Bare setup call, zero counted operations.
