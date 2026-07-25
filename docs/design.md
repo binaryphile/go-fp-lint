@@ -996,16 +996,26 @@ any analyzer keyed on a specific external package's identity.
 `testdata/src/a/a.go` (`// want` fixtures) + `chainlambda_test.go`. Wired into
 `multichecker.Main` (8th analyzer).
 
-## Integration points (documented, not wired up this cycle)
+## Integration points
 
 Per the originating task: pre-commit hook, `/c` skill invocation, tandem
-gate-bash (`<linter> ./... || exit 1` on Standard-tier cycles touching
-`*.go`), author-time IDE/LSP integration. None of these are wired up
-yet — v1 ships the binary + one analyzer only. Wiring these up is
-follow-up scope, likely per-integration-point tasks rather than one
-umbrella task (each has a different owner/repo: pre-commit hooks live
-per-repo, `/c` skill lives in `~/.claude/skills/`, gate-bash is a
-per-cycle plan-file convention).
+gate-bash, author-time IDE/LSP integration.
+
+- **`/c` skill invocation**: **Wired** (tandem-protocol commit `6491291`) —
+  `~/.claude/commands/c.md` runs `go-fp-lint ./...` as a mechanical
+  pre-check feeding the compliance grade.
+- **Tandem gate-bash**: **Wired** (jeeves #71279, arc cycle 3/4) —
+  `tandem-protocol/templates/plan-gate-bash.md`'s Completion Gate block now
+  runs `go-fp-lint -impuresource=false -impurereach=false ./... || exit 1`
+  whenever the repo root has a `go.mod` and `go-fp-lint` is on PATH. The
+  two informational-only analyzers (`impuresource`/`impurereach`) are
+  excluded from this hard gate — see their Roster status above
+  (`#66086`/`#66155`-gated normative upgrade); gating on them now would
+  block on findings the tool's own docs say aren't yet enforceable.
+- **Pre-commit hook**, **author-time IDE/LSP integration**: not wired up —
+  each has a different owner/repo (pre-commit hooks live per-repo; IDE/LSP
+  wiring is author-tooling, not a go-fp-lint-repo concern) — tracked as
+  follow-up scope, not this task's responsibility.
 
 ## Verification performed (v1 cycle)
 
