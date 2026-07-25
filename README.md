@@ -23,7 +23,7 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-Ten analyzers ship today (see `docs/design.md` §vN for each; §Roster for
+Eleven analyzers ship today (see `docs/design.md` §vN for each; §Roster for
 the full tiered plan):
 
 - `filterloop` — for-loop filter shapes that
@@ -46,6 +46,10 @@ the full tiered plan):
 - `internalmock` — `Mock<X>` types whose target `<X>` is defined within the
   same module (a design smell — extract pure domain logic instead), vs. a
   real inter-system boundary mock (go-development-guide.md §6).
+- `methodexpr` — Tier-B codemod: `func(x T) R { return x.M() }` passed to a
+  fluentfp chain method → the method expression `T.M`
+  (fluentfp-guide.md §Method Expressions); offered via `SuggestedFix`
+  (`-fix`/`-diff`), name-free, value-receiver-only.
 
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.

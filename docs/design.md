@@ -208,7 +208,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | continue-guard filter shape | fluentfp | C | **Shipped v1.1** (#65780) |
 | `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
 | chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; types-resolved — see §"Tier-A spec: chain line-layout"). Arc CLOSED: #71278 install → #71279 gate-bash wire → #71280 guide-shrink, all shipped. Root coverage extended v1→v2 (**Shipped**, jeeves #71302): variable-rooted and function-return-rooted chains now enforced via generalized static-type root detection, not just setup-constructor-rooted. Remaining exclusion: dot-imported chains. Rewriting `SuggestedFix` not shipped |
-| method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | codemod, name-free — #66032 |
+| method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | **Shipped v11** (`methodexpr`, #66032; name-free `SuggestedFix`, value-receiver-only — see §v11) |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
@@ -1419,3 +1419,84 @@ unwrap-alias/pointer/named/package-path logic inline (DRY).
   change doesn't self-trip the gate it now participates in.
 - **No new v1-claim regression**: dot-imported chains remain the one
   documented exclusion (unchanged, not addressed this cycle).
+
+## v11: `methodexpr` (jeeves #66032)
+
+Eleventh analyzer, eleventh package: `methodexpr/`. The Tier-B (Codemod)
+flagship rule identified by investigation #65931 (era `e6372253f9f8`): rewrite
+a single-parameter, single-statement passthrough lambda passed to a fluentfp
+chain method — `func(x T) R { return x.M() }` — to the method expression
+`T.M` (fluentfp-guide.md §"Method Expressions (preferred)": "Decision
+flowchart: Method on type? → YES: Use method expression"). Genuinely
+name-free (T and M are both already-existing identifiers, nothing invented)
+and semantics-preserving modulo the receiver-aliasing edge case below, so it
+ships as an `analysis.SuggestedFix` (offered via `-fix`/`-diff`, not
+always-on) rather than an unconditional rewrite.
+
+**Detection**: for each fluentfp chain-method call site (same
+`isFluentfpChainMethodCall` identification approach as `chainlayout`/
+`chainlambda` — type-resolved via `pass.TypesInfo.Uses`, not method-name
+guessing), each `*ast.FuncLit` argument is checked against the exact
+passthrough shape: one parameter, one statement (`return x.M()`), zero
+arguments to `M`, and `M`'s receiver identical to the lambda's own sole
+parameter (`pass.TypesInfo.Uses`/`Defs` identity, not name matching — so a
+same-named outer variable is correctly rejected, see `NegWrongReceiver`).
+
+**Safety scope (two guards, both load-bearing)**:
+
+1. **Value-receiver only.** fluentfp-guide.md's own "Critical: Use value
+   receivers for read-only methods" — a pointer-receiver `M` would require
+   the method expression `(*T).M`, whose type `func(*T) R` does not match
+   the original `func(T) R`, so it is never a drop-in replacement. Checked
+   via `sig.Recv().Type().(*types.Pointer)` (same pattern as `aliaswrite`).
+2. **Identical (not merely assignable) result type.** Go function values are
+   invariant in their result type — `func(T) string` is not assignable where
+   `func(T) any` is expected even though `string` satisfies `any`. Checked
+   via `types.Identical`, not `types.AssignableTo`. Without this guard, a
+   result-type-widening lambda (e.g. `func(t Thing) any { return
+   t.Identify() }` where `Identify() string`) would produce a `SuggestedFix`
+   that fails to compile once applied.
+
+**Overlap with `chainlambda`, accepted**: `chainlambda`'s existing rule
+("inline lambda passed to a fluentfp chain method") is strictly broader than
+`methodexpr`'s rewritable subset — the same lambda can trip both. Not
+resolved by mutual exclusion this cycle (no cross-package import introduced
+between the two analyzer packages, keeping each independently buildable/
+testable per repo convention); a reader acting on either message ends up at
+the same correct code, so the overlap is redundant-but-harmless rather than
+contradictory (unlike the true false-positive overlaps this repo's `recvshape`
+explicitly ports `copylocks`' exclusion logic to avoid).
+
+**Structure** mirrors the other analyzers: `methodexpr.go`,
+`testdata/src/a/a.go` (`// want` fixtures), `testdata/src/a/a.go.golden`
+(the `SuggestedFix`-applied expected output — `analysistest.RunWithSuggestedFixes`,
+not plain `Run`, the first use of golden-file fix verification in this repo),
+a synthetic external fluentfp stub, and `methodexpr_test.go`. Wired into
+`multichecker.Main` (11th analyzer).
+
+## Verification performed (v11 cycle — `methodexpr`, jeeves #66032)
+
+TDD red/green (REQUIRED per khorikov-unit-testing-guide.md): authored first
+were `methodexpr_test.go`, `testdata/src/a/a.go`, and `a.go.golden`. First
+run was RED (no non-test Go files); GREEN on the first real-logic
+implementation, including the golden-file `SuggestedFix` comparison.
+
+- `go test ./methodexpr/` — 1 positive flagged with a `SuggestedFix` that,
+  applied, matches `a.go.golden` byte-for-byte (`slice.From(xs).KeepIf(func(d
+  Developer) bool { return d.IsIdle() })` → `slice.From(xs).KeepIf(Developer.IsIdle)`).
+  6 negatives silent: pointer receiver (`NegPointerReceiver`), already-named
+  function — not a `*ast.FuncLit` at all (`NegNamedFunc`), extra call arg
+  (`NegExtraArgs`), multi-statement body (`NegMultiStatement`), receiver
+  identity mismatch — captures an outer var instead of the lambda's own
+  parameter (`NegWrongReceiver`), and assignable-but-not-identical result
+  type (`NegResultTypeMismatch`).
+- `go build ./cmd/go-fp-lint` — wired as the **11th** analyzer; builds clean.
+- `go test ./...` (11 analyzer packages + `cmd`) / `go vet ./...` /
+  `go fmt ./...` — all green, no formatting drift.
+- Ran the rebuilt binary (`go-fp-lint -impuresource=false -impurereach=false
+  ./...`, the tandem-gate invocation) against the whole repo — clean, rc=0.
+- **No overlap regression with `chainlayout`**: `PosValueReceiver`'s single-op
+  chain (`slice.From(xs).KeepIf(...)`) is correctly inline per `chainlayout`'s
+  own rule both before AND after the `methodexpr` fix is applied — verified
+  by inspection of `a.go.golden` (single op, inline, no `chainlayout`
+  diagnostic would fire on it).
