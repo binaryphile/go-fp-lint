@@ -23,7 +23,7 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-Nine analyzers ship today (see `docs/design.md` §vN for each; §Roster for
+Ten analyzers ship today (see `docs/design.md` §vN for each; §Roster for
 the full tiered plan):
 
 - `filterloop` — for-loop filter shapes that
@@ -42,6 +42,9 @@ the full tiered plan):
 - `chainlayout` — fluentfp chain line-layout: single-op chains inline, multi-op
   one-per-line with trailing dots (fluentfp-guide.md §Chain Formatting; Tier-A
   detector, setup-constructor-rooted).
+- `internalmock` — `Mock<X>` types whose target `<X>` is defined within the
+  same module (a design smell — extract pure domain logic instead), vs. a
+  real inter-system boundary mock (go-development-guide.md §6).
 
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.

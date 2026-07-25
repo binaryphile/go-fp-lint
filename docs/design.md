@@ -214,7 +214,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **Shipped v7** (`chainlambda`, #65782; type-resolved fluentfp receiver, see §v7) |
 | pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
-| internal mock detection (design smell) | go-dev | C | **#65785** |
+| internal mock detection (design smell) | go-dev | C | **Shipped v9** (`internalmock`, #65785; name-correlated + import-path module-root check — see §v9) |
 | slice/map field mutation without `Clone()` | go-dev | C | **Shipped v6** (`aliaswrite`, #65786; aliasing undecidable — tight conservative scope, see §v6) |
 | `option.Basic` / `option.Option` API drift | fluentfp / go-dev | C (rename → B) | no analyzer task yet |
 
@@ -1309,3 +1309,61 @@ non-test Go files); GREEN on the first real-logic implementation.
 - **No double-flag with `chainlambda`**: orthogonal concerns (lambda-as-argument
   vs chain line-layout); running the 9-analyzer binary on the repo's own
   (non-fluentfp) code emits zero `chainlayout` diagnostics.
+
+## v9: `internalmock` (jeeves #65785)
+
+Ninth analyzer, ninth package: `internalmock/`. Follow-up to `filterloop` v1
+(#62380). Detects hand-rolled `Mock<X>` struct types whose correlated `<X>`
+type is defined **within the same module** as the mock — go-development-guide.md
+§6 / khorikov-unit-testing-guide.md §6: intra-system mocks are a design smell
+(extract pure domain logic instead); inter-system mocks (a real boundary —
+email gateway, payment API, third-party client) are fine and not flagged.
+
+**Detection**: (1) find a struct type named `Mock<X>` (regex on the PascalCase
+suffix); (2) look up a type literally named `<X>`, first in the mock's own
+package, then in each directly imported package, via `pass.TypesInfo`/
+`types.Package.Scope()` — not text matching; (3) derive a comparable "module
+root" from each side's import path (VCS-hosted paths — first segment contains
+a `.` — collapse to their first three segments; everything else, stdlib or a
+synthetic single-segment package, is its own root in full) and compare. Same
+root → report; different root → silent (real boundary); target not found
+anywhere reachable → silent (conservative, favors false-negative, per repo
+precedent — see `aliaswrite`/`recvshape`).
+
+**v1 scope, stated explicitly**: correlation is by name only (`Mock<X>` ↔
+`<X>`), not by verifying the mock's method set actually implements `<X>`'s
+interface. A same-module type that happens to share the stripped name would
+false-positive; accepted for v1 since the naming convention this rule targets
+*is* the repo's own mocking convention.
+
+**Structure** mirrors the other analyzers: `internalmock.go` +
+`testdata/src/a/a.go` (`// want` fixtures) + a synthetic external dependency
+at `testdata/src/github.com/example/emailapi/emailapi.go` (mirrors
+`chainlambda`'s stubbed-external-package testdata pattern) +
+`internalmock_test.go`. Wired into `multichecker.Main` (10th analyzer).
+
+## Verification performed (v9 cycle — `internalmock`, jeeves #65785)
+
+TDD red/green (REQUIRED per khorikov-unit-testing-guide.md): authored first
+were `internalmock_test.go`, `testdata/src/a/a.go`, and the synthetic
+`github.com/example/emailapi` package. First run was RED (no non-test Go
+files); GREEN on the first real-logic implementation.
+
+- `go test ./internalmock/` — 2 positives flagged (`MockOrderRepository` ↔
+  same-package `OrderRepository` interface; `MockUserStore` ↔ same-package
+  `UserStore` struct — name-correlation doesn't require an interface, matching
+  the stated v1 scope), 4 negatives silent (`MockGateway` ↔ `emailapi.Gateway`,
+  a different module — the real-boundary case; `MockUnknown` — no correlated
+  type found anywhere reachable; `mockLowercase` — fails the PascalCase-suffix
+  name match; `NotAMock` — doesn't start with `Mock`).
+- `go build ./cmd/go-fp-lint` — wired as the **10th** analyzer; builds clean.
+- `go test ./...` (10 analyzer packages + `cmd`) / `go vet ./...` — green.
+- Ran the built 10-analyzer binary against the whole repo's own source: the
+  two new diagnostic classes it can itself trip (`impuresource`'s
+  package-scope-var-read on the compiled `mockNameRe`; `impurereach`'s
+  interface-dispatched-call on `pass.ReportRangef`) are the same pre-existing,
+  informational, not-yet-normative classes every other analyzer in the repo
+  already trips (`recvshape`'s `lockerType`, `aliaswrite`'s interface-dispatched
+  calls) — no new violation class introduced, consistent with the #66086/
+  #66155-gated "informational inventory, not yet enforced" status noted in the
+  roster table above.

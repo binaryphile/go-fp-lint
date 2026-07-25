@@ -13,6 +13,7 @@ import (
 	"github.com/binaryphile/go-fp-lint/filterloop"
 	"github.com/binaryphile/go-fp-lint/impurereach"
 	"github.com/binaryphile/go-fp-lint/impuresource"
+	"github.com/binaryphile/go-fp-lint/internalmock"
 	"github.com/binaryphile/go-fp-lint/mapshape"
 	"github.com/binaryphile/go-fp-lint/nestedcall"
 	"github.com/binaryphile/go-fp-lint/recvshape"
@@ -21,5 +22,5 @@ import (
 // multichecker (not singlechecker) even with one analyzer today — future
 // analyzers (docs/design.md roster) just add to this list.
 func main() {
-	multichecker.Main(filterloop.Analyzer, impuresource.Analyzer, impurereach.Analyzer, nestedcall.Analyzer, mapshape.Analyzer, recvshape.Analyzer, aliaswrite.Analyzer, chainlambda.Analyzer, chainlayout.Analyzer)
+	multichecker.Main(filterloop.Analyzer, impuresource.Analyzer, impurereach.Analyzer, nestedcall.Analyzer, mapshape.Analyzer, recvshape.Analyzer, aliaswrite.Analyzer, chainlambda.Analyzer, chainlayout.Analyzer, internalmock.Analyzer)
 }
