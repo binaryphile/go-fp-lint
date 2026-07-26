@@ -32,7 +32,8 @@ var (
 // parenDepthBad: 3 nested opens without closing (f1 -> g1 -> h1) — exceeds
 // the "don't open more than two parens without closing" limit.
 func parenDepthBad() int {
-	return f1(g1(h1(a))) // want "call nesting depth exceeds 2"
+	change_me_2 := g1(h1(a))
+	return f1(change_me_2) // want "call nesting depth exceeds 2"
 }
 
 // parenDepthOk: exactly 2 opens (f1 -> g1) — at the boundary, not a violation.
@@ -50,7 +51,8 @@ func methodChainNotArgNesting() Chain {
 // uniformCommasBad: outer f2 has 2 args, inner g2 also has 2 args — commas
 // at both nesting levels.
 func uniformCommasBad() int {
-	return f2(g2(a, b), c) // want "commas at multiple nesting levels"
+	change_me_3 := g2(a, b)
+	return f2(change_me_3, c) // want "commas at multiple nesting levels"
 }
 
 // uniformCommasOkInnerOnly: outer f1 has 1 arg — commas only at the inner
@@ -69,7 +71,8 @@ func uniformCommasOkOuterOnly() int {
 // triggers both paren-depth (f2->g2->h1 = 3 opens) and uniform-commas
 // (f2 and g2 both multi-arg).
 func bothViolations() int {
-	return f2(g2(h1(a), b), c) // want "call nesting depth exceeds 2" "commas at multiple nesting levels"
+	change_me_4 := g2(h1(a), b)
+	return f2(change_me_4, c) // want "call nesting depth exceeds 2" "commas at multiple nesting levels"
 }
 
 // nestedZeroArgCalls: sibling zero-arg nested calls — neither call is
@@ -100,7 +103,8 @@ func parenthesizedCallee() int {
 // mixedSiblingDepth: three sibling args to f3, only one (g1(h1(a))) nests
 // deep enough to matter — confirms max-not-sum aggregation across siblings.
 func mixedSiblingDepth() int {
-	return f3(g1(h1(a)), b, c) // want "call nesting depth exceeds 2"
+	change_me_5 := g1(h1(a))
+	return f3(change_me_5, b, c) // want "call nesting depth exceeds 2"
 }
 
 // ---- change_me-placeholder extraction fix fixtures (jeeves #66034) ----
@@ -131,7 +135,8 @@ var ch chan int
 // return) — the fix applies to the ExprStmt half of domain condition 1,
 // not just return.
 func exprStmtParenDepthFix() {
-	sinkOne(f1(g1(h1(a)))) // want "call nesting depth exceeds 2"
+	change_me_6 := f1(g1(h1(a)))
+	sinkOne(change_me_6) // want "call nesting depth exceeds 2"
 }
 
 // oneLineBlockNoFix: the violating statement is not alone on its source
@@ -143,7 +148,8 @@ func oneLineBlockNoFix() { sinkOne(f1(g1(h1(a)))) } // want "call nesting depth 
 // semicolonNoFix: a semicolon-separated preceding statement on the same
 // line — /grade r3 finding 2's other counterexample.
 func semicolonNoFix() {
-	sinkOne(a); sinkOne(f1(g1(h1(a)))) // want "call nesting depth exceeds 2"
+	sinkOne(a)
+	sinkOne(f1(g1(h1(a)))) // want "call nesting depth exceeds 2"
 }
 
 // shortCircuitNoFix: violation lives inside a short-circuit && condition,
@@ -243,7 +249,8 @@ func outerFuncFixDespiteNestedClosureGoto() int {
 	L:
 	}
 	inner()
-	return f1(g1(h1(a))) // want "call nesting depth exceeds 2"
+	change_me_7 := g1(h1(a))
+	return f1(change_me_7) // want "call nesting depth exceeds 2"
 }
 
 // internalCommentNoFix: a comment lives inside the candidate's own span
@@ -273,7 +280,8 @@ Label:
 // rather than a post-gofmt-normalized one (/grade r2 finding 4).
 func indentedNestedBlockFix() int {
 	if true {
-		return f1(g1(h1(a))) // want "call nesting depth exceeds 2"
+		change_me_8 := g1(h1(a))
+		return f1(change_me_8) // want "call nesting depth exceeds 2"
 	}
 	return 0
 }
@@ -283,3 +291,4 @@ func indentedNestedBlockFix() int {
 // diagnose package-level initializers (/grade r1's own caveat), and that
 // the no-enclosing-block case is diagnostic-only with no crash.
 var pkgVarViolation = f1(g1(h1(a))) // want "call nesting depth exceeds 2"
+

@@ -30,7 +30,10 @@ the full tiered plan):
   `slice.From(xs).KeepIf(predicate)` expresses more directly.
 - `impuresource` — direct impure-call + package-var touch inventory.
 - `impurereach` — transitive reach into impure sources.
-- `nestedcall` — paren-depth / uniform-comma nested-call shapes.
+- `nestedcall` — paren-depth / uniform-comma nested-call shapes; offers a
+  `change_me`-placeholder extraction `SuggestedFix` (`-fix`/`-diff`) within
+  a narrow, evaluation-order-safe domain (jeeves #66034; see
+  `docs/design.md` §v12).
 - `mapshape` — map-loop shapes that `Transform`/`ToXxx`/`Map` express.
 - `recvshape` — pointer receivers that could be value receivers
   (go-development-guide.md §3).

@@ -209,7 +209,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | `impuresource` — direct impure-call + package-var touch | fp-unified | C | **Shipped v2** (#65900; §v2). Informational inventory; normative upgrade deferred (#66086 ← #66155). Transitive: **Shipped v2.1** (#65901; §v2.1) |
 | chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; types-resolved — see §"Tier-A spec: chain line-layout"). Arc CLOSED: #71278 install → #71279 gate-bash wire → #71280 guide-shrink, all shipped. Root coverage extended v1→v2 (**Shipped**, jeeves #71302): variable-rooted and function-return-rooted chains now enforced via generalized static-type root detection, not just setup-constructor-rooted. Remaining exclusion: dot-imported chains. Rewriting `SuggestedFix` not shipped |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | **Shipped v11** (`methodexpr`, #66032; name-free `SuggestedFix`, value-receiver-only — see §v11) |
-| paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix deferred **#66034** |
+| paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix **Shipped** (#66034; narrow safety domain — see §v12) |
 | double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **Shipped v7** (`chainlambda`, #65782; type-resolved fluentfp receiver, see §v7) |
@@ -218,11 +218,11 @@ foundation); a Tier-B codemod fix may be layered on later.
 | slice/map field mutation without `Clone()` | go-dev | C | **Shipped v6** (`aliaswrite`, #65786; aliasing undecidable — tight conservative scope, see §v6) |
 | `option.Basic` / `option.Option` API drift | fluentfp / go-dev | C (rename → B) | no analyzer task yet |
 
-Deferred / optional (tracked): `change_me` extraction substrate **#66034**, LLM
-naming pass **#66036** (gated on a demonstrated migration need), guide-shrink
-umbrella **#66033** (gated per-tier on the owning tool shipping), effect-lite
-purity design **#66155** (gates enforcement #66086), this design.md write
-**#66161**.
+Deferred / optional (tracked): LLM naming pass **#66036** (gated on a
+demonstrated migration need — `change_me` extraction itself shipped, §v12),
+guide-shrink umbrella **#66033** (gated per-tier on the owning tool shipping),
+effect-lite purity design **#66155** (gates enforcement #66086), this
+design.md write **#66161**.
 
 **Overlap discipline.** Several conventions surveyed in #65931 are already
 enforced by existing tooling (`copylocks`, `errorlint`, `copyloopvar`,
@@ -1500,3 +1500,155 @@ implementation, including the golden-file `SuggestedFix` comparison.
   own rule both before AND after the `methodexpr` fix is applied — verified
   by inspection of `a.go.golden` (single op, inline, no `chainlayout`
   diagnostic would fire on it).
+
+## v12: `nestedcall` change_me extraction fix (jeeves #66034)
+
+`nestedcall`'s (§v3) `change_me`-placeholder fix, deferred at plan time and
+picked back up as the pilot instance of jeeves#87588's ("transform-primary
+compliance pipeline") CODEMOD+placeholder tier: a deterministic hoist to a
+safe position plus an obvious-tell `change_me_N` identifier (no LLM naming
+step in scope — that's #66036, still separately deferred). Both `nestedcall`
+diagnostics (paren-depth, uniform-commas) share the same remedy in guide
+prose — "extract the inner call into an intermediate named variable" — so
+one fix builder (`nestedcall/extract.go`) serves both, following
+`methodexpr`'s (§v11) offered-not-imposed `SuggestedFix` precedent
+(`-fix`/`-diff`, never auto-applied).
+
+**Why this took four `/grade` rounds.** A naive "hoist the nested call above
+the statement" transform is unsound in general — evaluation order, scope,
+`goto`, typing, and comments can all be broken by moving a subexpression
+earlier in the source. Rather than build a general evaluation-order/purity
+analysis, the fix narrows to a domain where none of those hazards can arise
+BY CONSTRUCTION. The domain tightened across rounds, each closing a real
+counterexample the previous round's construction missed:
+
+- **R1** (SEND BACK): the original "no other `CallExpr` in the statement"
+  gate missed non-call hazards (channel receives, short-circuit `&&`/`||`,
+  indexing) and scope/label/`goto`-crossing hazards; also, candidate
+  selection re-scanned `call.Args` at fix time instead of using the exact
+  node the detector's own violation computation identified.
+- **R2** (SEND BACK): even "the outer call IS the entire statement" (R1's
+  fix) was unsound — `outer(<-ch, inner(a))` is a bare `ExprStmt` satisfying
+  that domain, yet hoisting `inner(a)` still reorders it ahead of the
+  receive, because the hazard is evaluation order *within* the outer call,
+  not just other statement-level operands. R2 adopted the grader's own
+  suggested conservative construction: candidate must be exactly
+  `outerCall.Args[0]`, the outer callee must be a bare package-level
+  `*ast.Ident` (no receiver/function-operand evaluation), and no `goto`
+  anywhere in the enclosing function.
+- **R3** (SEND BACK): two narrower correctness bugs in the R2 construction —
+  a `*types.Tuple` check alone missed **untyped constant** results (e.g.
+  `complex(1, 2)` defaults to `complex128` in a bare `:=`, which may not be
+  assignable back to a narrower original parameter type like `complex64`);
+  and the indentation-insertion construction had a real double-indent bug,
+  unsafe whenever the statement isn't alone on its source line (a one-line
+  block, a semicolon-separated preceding statement).
+- **R4** (APPROVE, two non-blocking implementation notes): confirmed the R3-
+  corrected construction sound; asked for `pass.ReadFile` (driver-overlay-
+  aware) over raw `os.ReadFile`, and for the `goto` scan to be scoped to the
+  *nearest* enclosing `FuncDecl`/`FuncLit`, not the outermost `FuncDecl`
+  recursively (a `goto` in an unrelated sibling closure must not suppress a
+  fix in a different, `goto`-free nested closure).
+
+**Final safety domain** (all six required; any miss → diagnostic-only, no
+fix):
+
+1. Enclosing statement is `return <outerCall>` (single result) or a bare
+   `*ast.ExprStmt` whose sole expression is `<outerCall>` — the outer call
+   IS the whole statement, closing conditional-execution hazards (`if
+   ready && outer(...)` never qualifies).
+2. Candidate is exactly `outerCall.Args[0]` — nothing earlier in the call
+   to reorder against.
+3. `outerCall.Fun` is a bare `*ast.Ident` resolving (`pass.TypesInfo.Uses`)
+   to a package-level, non-method `*types.Func` — no receiver or
+   function-operand evaluation.
+4. Candidate has exactly one, non-constant result — rejects both
+   `*types.Tuple` (multi-result, e.g. `outer(pair())`) and, more broadly,
+   ANY compile-time-constant candidate. This is a deliberate departure from
+   R3's own suggested `Underlying().(*types.Basic).Info()&IsUntyped` check:
+   `pass.TypesInfo.Types[candidate].Type` at the candidate's *original*
+   (already-converted) call-argument position records the type it was
+   implicitly converted TO (e.g. `complex64`), not its untyped default —
+   the untyped-ness is exactly what that conversion consumes, so checking
+   `IsUntyped` there would silently never fire. Rejecting every constant
+   candidate is a strict superset that needs no re-type-checking in
+   isolation (`types.CheckExpr`) and costs nothing on the common path — an
+   ordinary function call is never constant in Go.
+5. No `goto` anywhere in the *nearest* enclosing `FuncDecl`/`FuncLit` body
+   (not the outermost `FuncDecl` recursively) — conservative and blunt on
+   purpose, no crossing analysis attempted.
+6. No comment intersects the candidate's own `[Pos, End)` span, checked by
+   iterating `file.Comments` positionally (not a single
+   `ast.CommentMap[candidate]` lookup, which misses comments attached to a
+   *descendant* node, e.g. `inner(/* why */ x)`'s comment attaches to `x`).
+
+**Insertion site**: the enclosing statement must be a direct member of an
+`*ast.BlockStmt.List` (a single stack-based parent-tracking walk,
+`buildParentIndex`, done once per file) — this single check closes both
+statement-local init-clause scope leakage (an `if`/`for`/`switch` init
+clause is never itself a direct list member) and labeled statements (whose
+parent is `*ast.LabeledStmt`, not `*ast.BlockStmt`), since a `goto` could
+jump over the inserted declaration into a labeled statement's scope.
+
+**Fix shape**: whitespace-verified, not gofmt-dependent. The source bytes
+from the enclosing line's start up to `stmt.Pos()` must be pure
+spaces/tabs (`lineIndent`) — otherwise withhold the fix (a one-line block
+or a semicolon-separated preceding statement has no safe indent to derive).
+Otherwise, insert `change_me_N := <candidate, via go/printer>\n<indent>` at
+`stmt.Pos()` itself (not line-start — the existing indent already precedes
+it) and replace the candidate's span with `change_me_N`. Source is read via
+`pass.ReadFile` when the driver provides it, falling back to `os.ReadFile`.
+
+**Placeholder allocation**: one `placeholderAllocator` per analyzed file,
+seeded by a single collection pass over every `change_me_\d+`-shaped
+identifier already present, reserving each allocated name immediately in
+its own counter state (not just in the unchanged source AST) — so two
+independently-fixed violations in the same file can never both compute the
+same name.
+
+**Single-fix-per-call rule**: when a call trips both diagnostics and they
+identify the *same* candidate node, the `SuggestedFix` is attached only to
+the paren-depth diagnostic (not both) — an identical fix attached to two
+diagnostics risks being applied twice by a fix-consumer that doesn't
+dedupe by content. If the two diagnostics identify *different* nodes for
+the same call, both are independently ambiguous and neither gets a fix.
+
+**Structure**: `nestedcall/extract.go` (new — candidate/safety-gate logic,
+shared by both diagnostics), `nestedcall/nestedcall.go` (wires
+`SuggestedFixes` onto the existing `pass.Report` calls), extended
+`testdata/src/a/a.go` + `a.go.golden`, `nestedcall_test.go` switched to
+`analysistest.RunWithSuggestedFixes` (methodexpr's own pattern).
+
+## Verification performed (v12 cycle — `nestedcall` extraction fix, jeeves #66034)
+
+- `go test ./nestedcall/...` — every positive fixture (`parenDepthBad`,
+  `uniformCommasBad`, `bothViolations`, `mixedSiblingDepth`,
+  `exprStmtParenDepthFix`, `outerFuncFixDespiteNestedClosureGoto`,
+  `indentedNestedBlockFix`) produces a `SuggestedFix` matching
+  `a.go.golden` byte-for-byte, sequentially numbered `change_me_2` through
+  `change_me_8` (the file's pre-existing `change_me_1` correctly forces the
+  allocator to start at 2). Every negative fixture — `oneLineBlockNoFix`,
+  `semicolonNoFix`, `shortCircuitNoFix`, `statementLocalScopeNoFix`,
+  `earlierChannelOrderingNoFix`, `earlierArgCallOrderingNoFix`,
+  `funcOperandOrderingNoFix`, `receiverOperandOrderingNoFix`,
+  `multiResultCandidateNoFix`, `untypedConstantNoFix`, `gotoNoFix`,
+  `internalCommentNoFix`, `labeledStatementNoFix`, `pkgVarViolation` —
+  correctly reports its diagnostic with no fix attached.
+- `go build ./...` / `go vet ./...` / `go test ./...` (11 analyzer packages
+  + `cmd`) — all green, no regressions in any other package.
+- `gofmt -l` clean on `extract.go`, `nestedcall.go`, `nestedcall_test.go`.
+  `testdata/src/a/a.go` deliberately carries two non-gofmt-canonical spots
+  (`oneLineBlockNoFix`'s one-line block, `semicolonNoFix`'s `;`-joined
+  statements) — intentional, since gofmt would otherwise normalize away the
+  exact non-canonical source shapes those two negative fixtures exist to
+  test (same rationale as `chainlayout`'s own formatting-sensitive
+  fixtures).
+- `go build -o go-fp-lint ./cmd/go-fp-lint` — builds clean, unchanged
+  analyzer count (11; this cycle extends `nestedcall`, doesn't add a new
+  package). A live `-fix -diff` CLI run against a scratch module hit an
+  unrelated sandbox limitation (`go list`/`packages.Load` against a
+  freshly-created external module hung regardless of network flags,
+  independent of this fix) and was abandoned as environmental, not a defect
+  — `analysistest.RunWithSuggestedFixes`'s in-memory golden-file comparison
+  already exercises the identical `SuggestedFix`-application code path the
+  CLI's `-fix` flag would use, so this is not a coverage gap.

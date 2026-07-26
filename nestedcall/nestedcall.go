@@ -28,17 +28,126 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	for _, file := range pass.Files {
 		calls := collectCallExprs(file)
 		nestedAsArg := nestedAsArgSet(calls)
+		idx := buildParentIndex(file)
+		alloc := newPlaceholderAllocator(file)
 
 		for _, call := range calls {
-			if !nestedAsArg[call] && chainDepth(call) > 2 {
-				pass.Report(analysis.Diagnostic{Pos: call.Pos(), Message: parenDepthMessage})
+			parenDepthViolation := !nestedAsArg[call] && chainDepth(call) > 2
+			uniformCommasViolation := hasUniformCommaViolation(call)
+			if !parenDepthViolation && !uniformCommasViolation {
+				continue
 			}
-			if hasUniformCommaViolation(call) {
-				pass.Report(analysis.Diagnostic{Pos: call.Pos(), Message: uniformCommasMessage})
+
+			// change_me-placeholder SuggestedFix (jeeves #66034): candidate
+			// is threaded from the SAME violation computation above, not
+			// rescanned, and shared between both diagnostics when they
+			// agree on one node -- see extract.go's package doc.
+			var fix *analysis.SuggestedFix
+			if candidate, ok := sharedCandidate(call, parenDepthViolation, uniformCommasViolation); ok {
+				if f, ok := extractionFix(pass, file, idx, alloc, call, candidate); ok {
+					fix = &f
+				}
+			}
+
+			if parenDepthViolation {
+				diag := analysis.Diagnostic{Pos: call.Pos(), Message: parenDepthMessage}
+				if fix != nil {
+					diag.SuggestedFixes = []analysis.SuggestedFix{*fix}
+				}
+				pass.Report(diag)
+			}
+			if uniformCommasViolation {
+				diag := analysis.Diagnostic{Pos: call.Pos(), Message: uniformCommasMessage}
+				// Single-fix-per-call rule: when both diagnostics fire on
+				// the same call, only paren-depth carries the fix (attached
+				// above) -- attaching an identical SuggestedFix to both
+				// risks a double-apply by a fix-consumer that doesn't
+				// dedupe by content.
+				if fix != nil && !parenDepthViolation {
+					diag.SuggestedFixes = []analysis.SuggestedFix{*fix}
+				}
+				pass.Report(diag)
 			}
 		}
 	}
 	return nil, nil
+}
+
+// sharedCandidate resolves the single extraction candidate for call given
+// which diagnostic(s) fired. When both diagnostics fire, they must identify
+// the SAME node or the call is treated as independently ambiguous for both
+// (no fix) -- matches filterloop's "no silent transform on ambiguous
+// shapes" precedent.
+func sharedCandidate(call *ast.CallExpr, parenDepthViolation, uniformCommasViolation bool) (*ast.CallExpr, bool) {
+	var parenCand, commaCand *ast.CallExpr
+	var parenOk, commaOk bool
+	if parenDepthViolation {
+		parenCand, parenOk = deepestArgCandidate(call)
+	}
+	if uniformCommasViolation {
+		commaCand, commaOk = uniformCommaCandidate(call)
+	}
+	switch {
+	case parenDepthViolation && uniformCommasViolation:
+		if !parenOk || !commaOk || parenCand != commaCand {
+			return nil, false
+		}
+		return parenCand, true
+	case parenDepthViolation:
+		return parenCand, parenOk
+	case uniformCommasViolation:
+		return commaCand, commaOk
+	default:
+		return nil, false
+	}
+}
+
+// deepestArgCandidate returns the single *ast.CallExpr argument of call with
+// the strictly greatest chainDepth among call's direct CallExpr args, or
+// ok=false when there is no such arg or two args tie at the maximum depth
+// (ambiguous -- no fix).
+func deepestArgCandidate(call *ast.CallExpr) (*ast.CallExpr, bool) {
+	var best *ast.CallExpr
+	bestDepth := -1
+	tie := false
+	for _, arg := range call.Args {
+		argCall, ok := arg.(*ast.CallExpr)
+		if !ok {
+			continue
+		}
+		d := chainDepth(argCall)
+		switch {
+		case d > bestDepth:
+			best, bestDepth, tie = argCall, d, false
+		case d == bestDepth:
+			tie = true
+		}
+	}
+	if best == nil || tie {
+		return nil, false
+	}
+	return best, true
+}
+
+// uniformCommaCandidate returns the single *ast.CallExpr argument of call
+// that is itself a multi-arg call, or ok=false when there is none or more
+// than one such arg (ambiguous -- no fix).
+func uniformCommaCandidate(call *ast.CallExpr) (*ast.CallExpr, bool) {
+	if len(call.Args) <= 1 {
+		return nil, false
+	}
+	var best *ast.CallExpr
+	count := 0
+	for _, arg := range call.Args {
+		if argCall, ok := arg.(*ast.CallExpr); ok && len(argCall.Args) > 1 {
+			best = argCall
+			count++
+		}
+	}
+	if count != 1 {
+		return nil, false
+	}
+	return best, true
 }
 
 // collectCallExprs returns every *ast.CallExpr in file, in AST-walk order.
