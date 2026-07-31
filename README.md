@@ -23,7 +23,7 @@ go vet ./...     # lint this repo's own code
 
 ## Status
 
-Eleven analyzers ship today (see `docs/design.md` §vN for each; §Roster for
+Twelve analyzers ship today (see `docs/design.md` §vN for each; §Roster for
 the full tiered plan):
 
 - `filterloop` — for-loop filter shapes that
@@ -53,6 +53,10 @@ the full tiered plan):
   fluentfp chain method → the method expression `T.M`
   (fluentfp-guide.md §Method Expressions); offered via `SuggestedFix`
   (`-fix`/`-diff`), name-free, value-receiver-only.
+- `mapfusion` — two adjacent fluentfp maps that should fuse into one pass with a
+  composed function ("Don't chain when a single pass suffices",
+  go-development-guide.md); covers fluent-chain, standalone-nested `slice.Map`,
+  and mixed forms (`docs/design.md` §v13).
 
 The remaining categories from the originating task (jeeves #62380) are
 tracked as follow-up tasks — see `docs/design.md` §Roster.

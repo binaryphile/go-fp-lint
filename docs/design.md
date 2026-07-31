@@ -210,7 +210,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; types-resolved — see §"Tier-A spec: chain line-layout"). Arc CLOSED: #71278 install → #71279 gate-bash wire → #71280 guide-shrink, all shipped. Root coverage extended v1→v2 (**Shipped**, jeeves #71302): variable-rooted and function-return-rooted chains now enforced via generalized static-type root detection, not just setup-constructor-rooted. Remaining exclusion: dot-imported chains. Rewriting `SuggestedFix` not shipped |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | **Shipped v11** (`methodexpr`, #66032; name-free `SuggestedFix`, value-receiver-only — see §v11) |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix **Shipped** (#66034; narrow safety domain — see §v12) |
-| double-map fusion → composed pass | go-dev / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
+| double-map fusion → composed pass | go-dev / fp-unified | **C→B** | detector **Shipped v13** (`mapfusion`, #66830; unified `isMapOp`, all forms — fluent-chain/standalone-nested/mixed — see §v13). `SuggestedFix`/codemod (→B) not shipped |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **Shipped v7** (`chainlambda`, #65782; type-resolved fluentfp receiver, see §v7) |
 | pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
@@ -1655,3 +1655,56 @@ shared by both diagnostics), `nestedcall/nestedcall.go` (wires
   — `analysistest.RunWithSuggestedFixes`'s in-memory golden-file comparison
   already exercises the identical `SuggestedFix`-application code path the
   CLI's `-fix` flag would use, so this is not a coverage gap.
+
+## v13: `mapfusion` (jeeves #66830)
+
+New package `mapfusion/`. A Tier-C diagnostic for **double-map fusion** — two
+adjacent fluentfp map operations that should fuse into one pass with a composed
+function (the rule *"Don't chain when a single pass suffices"*,
+go-development-guide.md + functional-programming-unified-guide.md). Chaining two
+maps allocates an intermediate collection and reads worse than one pass.
+
+**One abstraction — `isMapOp(pass, expr) (source, ok)`** returns the data-source
+sub-expression (paren-stripped) if `expr` is a fluentfp map operation, in either
+form:
+
+- **(A) fluent map METHOD** `recv.M(fn)` — a genuine method VALUE call (`pass.TypesInfo.Selections[sel].Kind() == types.MethodVal`, which excludes the method-EXPRESSION form `T.M(recv,fn)`) whose method resolves to a fluentfp func named in `mapMethods`. Source = the receiver.
+- **(B) standalone map FUNCTION** `pkg.Map(data, fn)` — matched by an explicit table keyed by resolved `<pkgPath>.<Name>` → source-arg index, NOT by bare `name=="Map"`. Source = the arg at that index.
+
+**Detection.** For every `*ast.CallExpr` `call`: violation iff `isMapOp(call)`
+returns `(source, true)` AND `isMapOp(unparen(source))` also holds — a map whose
+own source is another map. Reported at the outer map's name. This single rule
+covers all four combinations: **A∘A** (fluent chain `x.Transform(f).Transform(g)`),
+**B∘B** (standalone-nested `slice.Map(slice.Map(xs,f),g)` — the task's literal
+shape), and **A∘B / B∘A** (mixed). `unparen` strips `*ast.ParenExpr` so
+`(x.Transform(f)).Transform(g)` is caught. Arguments are ignored, so a
+named-function double-map is flagged the same as a lambda one (fusion is
+shape-based). A triple-map run reports once per adjacent pair (each a real
+fusable site).
+
+**Deliberate exclusions.** `FlatMap` — `flatMap g . flatMap f ≠ flatMap(g∘f)`, so
+it is not simple map fusion. Method EXPRESSIONS (`T.M(recv,fn)`) — a v1 bounded
+choice, tested as a documented negative; a future extension may treat `Args[0]`
+as the source. A misuse in a *non*-fluentfp type (user `.Transform` method, local
+`Map` func) is not flagged — type-resolution rejects it.
+
+**Checked API inventory (3a soundness record).** The accepted surface was audited
+against `~/projects/fluentfp` rather than inferred from the test stub:
+
+- **Form A `mapMethods`** = {`Transform`, `ToAny`, `ToBool`, `ToByte`, `ToError`, `ToFloat32`, `ToFloat64`, `ToInt`, `ToInt32`, `ToInt64`, `ToRune`, `ToString`}. Every fluentfp method with one of these names (across `Mapper`/`Option`/`Either`/`Result`/`Seq`/`Stream`/`Entries`) is a pointwise map (one mapper-fn arg, mappable result); no fluentfp method with these names is a non-map. Terminal-looking `ToXxx` return a mappable wrapper (`Int`/`String`/`Float64`/`Mapper[X]`), which is what lets `.ToInt(f).ToInt(g)` chain.
+- **Form B table** = `{slice,kv,option,stream,either}.Map → 0`. Each is the sole standalone `Map` in its package, data-first (source arg 0), one mapper-fn arg. A different/future top-level `Map` does not match unless added.
+
+Package resolution matches the `github.com/binaryphile/fluentfp` root or a
+subpackage by path segment (not a bare substring), so a suffixed clone does not
+resolve as fluentfp.
+
+**Scope: all forms delivered.** An initial fluent-chain-only draft under-delivered
+the task's stated `Map(Map(xs,f),g)` shape; the unified `isMapOp` covers every
+form, so the earlier deferral #90252 was retired (superseded-by #66830).
+
+## Verification performed (v13 cycle — `mapfusion`, jeeves #66830)
+
+- `go test ./mapfusion` — `analysistest` fixture (`testdata/src/a/a.go` against a fluentfp stub) passes: positives for A∘A (lambda + named), A∘A cross-type, parenthesized receiver, standalone-nested (B∘B), parenthesized standalone source, mixed A∘B and B∘A, a second table entry (`option.Map`), and a triple (exactly 2 reports); negatives for single map, filter-before, filter-BETWEEN two maps, two non-map methods, `FlatMap` chain, non-fluentfp user type, local `Map` nest, and a method-EXPRESSION double-map.
+- `go build ./... && go test ./... && go vet ./...` — all clean (real toolchain, clean env; the per-project `bin/go` nix-wrapper E2BIGs — era memory `67f60f60f040`).
+- go-fp-lint self-lint (dogfood, `-impuresource=false -impurereach=false ./...`) — clean; `mapfusion` runs on go-fp-lint's own source with no findings.
+- Registered: `multichecker.Main(...)` now includes `mapfusion.Analyzer`; the built binary's `help` lists it (12th analyzer).
