@@ -210,7 +210,7 @@ foundation); a Tier-B codemod fix may be layered on later.
 | chain line-layout (one-op-per-line / inline) | all three | **A** | detector **Shipped v8** (`chainlayout`, #66031; types-resolved — see §"Tier-A spec: chain line-layout"). Arc CLOSED: #71278 install → #71279 gate-bash wire → #71280 guide-shrink, all shipped. Root coverage extended v1→v2 (**Shipped**, jeeves #71302): variable-rooted and function-return-rooted chains now enforced via generalized static-type root detection, not just setup-constructor-rooted. Remaining exclusion: dot-imported chains. Rewriting `SuggestedFix` not shipped |
 | method-expression (`func(x T) R { return x.M() }` → `T.M`) | fluentfp / fp-unified | **B** | **Shipped v11** (`methodexpr`, #66032; name-free `SuggestedFix`, value-receiver-only — see §v11) |
 | paren-depth + uniform-commas | fluentfp / go-dev | **C→B** | detector **Shipped** (`nestedcall`, #65783); `change_me` fix **Shipped** (#66034; narrow safety domain — see §v12) |
-| double-map fusion → composed pass | fluentfp / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
+| double-map fusion → composed pass | go-dev / fp-unified | **C→B** | detector task **#66830** (split out of #65783 at plan time — distinct violation condition, not a paren-depth/uniform-commas variant) + #66034 |
 | map-loop → `Transform`/`ToXxx`/`Map` | fluentfp / go-dev | C | detector **Shipped** (`mapshape`, #65781) |
 | inline lambda → named function (residual, non-method-expr) | fluentfp / go-dev | C | **Shipped v7** (`chainlambda`, #65782; type-resolved fluentfp receiver, see §v7) |
 | pointer receiver where value receiver works | go-dev | C | **Shipped v5** (#65784; overlap with `go vet copylocks` resolved via ported `lockPath`, see §v5) |
@@ -220,9 +220,12 @@ foundation); a Tier-B codemod fix may be layered on later.
 
 Deferred / optional (tracked): LLM naming pass **#66036** (gated on a
 demonstrated migration need — `change_me` extraction itself shipped, §v12),
-guide-shrink umbrella **#66033** (gated per-tier on the owning tool shipping),
-effect-lite purity design **#66155** (gates enforcement #66086), this
-design.md write **#66161**.
+guide-shrink umbrella **#66033** (gated per-tier on the owning tool shipping;
+Tier-A/`chainlayout` portion **consumed by #71280**, remaining tiers open), and
+effect-lite purity **enforcement #66086** (its design **#66155** is delivered —
+shipped, graded A−, commit `62b60db`, §"Effect-lite purity design"). The
+effect-lite design **#66155** and this **#66161** design.md write are delivered,
+not deferred.
 
 **Overlap discipline.** Several conventions surveyed in #65931 are already
 enforced by existing tooling (`copylocks`, `errorlint`, `copyloopvar`,
@@ -609,7 +612,7 @@ analyzer IDs or structured (`-json`) output.
 
 ## v2.1: `impurereach` (jeeves #65901)
 
-Fourth analyzer, new package `impurereach/`. Closes the gap #65900 punted:
+New package `impurereach/`. Closes the gap #65900 punted:
 "function-value indirection, callbacks, interface-mediated calls ... natural
 territory for #65901's callgraph machinery" (§Feasibility resolution above).
 Normand: "actions are infectious" — a function that doesn't itself directly
@@ -734,7 +737,7 @@ to compensate for.
 
 ## v3: `nestedcall` (jeeves #65783)
 
-Third analyzer, third package: `nestedcall/`. Detects two related
+New package `nestedcall/`. Detects two related
 call-nesting readability violations from fluentfp-guide.md /
 go-development-guide.md (duplicated verbatim in both — the rule is
 general-purpose Go guidance, not fluentfp-specific, so the analyzer has no
@@ -782,7 +785,7 @@ meaningful implementation beyond the generic CallExpr walk.
 
 ## v4: `mapshape` (jeeves #65781)
 
-Fourth analyzer, fourth package: `mapshape/`. Detects the map-loop shape —
+New package `mapshape/`. Detects the map-loop shape —
 a for-range loop with no `if`-guard whose body is exactly one
 `acc = append(acc, EXPR)`, where `EXPR` transforms the range value
 (distinct from `filterloop`'s guard-if/continue-guard shapes, which this
@@ -841,7 +844,7 @@ tasks.jeeves interaction 66952).
 
 ## v5: `recvshape` (jeeves #65784)
 
-Fifth analyzer, fifth package: `recvshape/`. Detects pointer-receiver
+New package `recvshape/`. Detects pointer-receiver
 methods that could be value receivers per go-development-guide.md §3 Value
 Semantics — default to value receivers; pointer receivers are for
 lock-containing types, interface-satisfaction consistency, or methods that
@@ -936,7 +939,7 @@ implementation (jeeves tasks.jeeves interactions 67060–67062).
 
 ## v6: `aliaswrite` (jeeves #65786)
 
-Sixth analyzer, sixth package: `aliaswrite/`. Detects the **Slice Aliasing
+New package `aliaswrite/`. Detects the **Slice Aliasing
 Trap** (go-development-guide.md §11): value-copying a struct copies slice/map
 headers but shares the backing array/map, so mutating that backing through a
 value-receiver method silently corrupts every other copy.
@@ -975,7 +978,7 @@ the tight-scope boundary, not an oversight.
 
 ## v7: `chainlambda` (jeeves #65782)
 
-Seventh analyzer, seventh package: `chainlambda/`. Detects an inline function
+New package `chainlambda/`. Detects an inline function
 literal passed directly as an argument to a **fluentfp chain method**
 (`KeepIf`, `RemoveIf`, `ToString`, …) — fluentfp-guide.md prefers a named
 function or method expression, which reads better in a chain. Residual to the
@@ -1328,7 +1331,7 @@ non-test Go files); GREEN on the first real-logic implementation.
 
 ## v9: `internalmock` (jeeves #65785)
 
-Ninth analyzer, ninth package: `internalmock/`. Follow-up to `filterloop` v1
+New package `internalmock/`. Follow-up to `filterloop` v1
 (#62380). Detects hand-rolled `Mock<X>` struct types whose correlated `<X>`
 type is defined **within the same module** as the mock — go-development-guide.md
 §6 / khorikov-unit-testing-guide.md §6: intra-system mocks are a design smell
@@ -1422,7 +1425,7 @@ unwrap-alias/pointer/named/package-path logic inline (DRY).
 
 ## v11: `methodexpr` (jeeves #66032)
 
-Eleventh analyzer, eleventh package: `methodexpr/`. The Tier-B (Codemod)
+New package `methodexpr/`. The Tier-B (Codemod)
 flagship rule identified by investigation #65931 (era `e6372253f9f8`): rewrite
 a single-parameter, single-statement passthrough lambda passed to a fluentfp
 chain method — `func(x T) R { return x.M() }` — to the method expression
