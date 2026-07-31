@@ -9,6 +9,7 @@ package mapfusion
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
 	"strings"
 
@@ -66,9 +67,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 			if _, ok := isMapOp(pass, source); ok {
 				// Report at the outer map's name (the second map that should
-				// fuse). isMapOp already confirmed call.Fun is a *SelectorExpr.
-				sel := call.Fun.(*ast.SelectorExpr)
-				pass.Report(analysis.Diagnostic{Pos: sel.Sel.Pos(), Message: message})
+				// fuse).
+				pass.Report(analysis.Diagnostic{Pos: calleeNamePos(call), Message: message})
 			}
 			return true
 		})
@@ -90,28 +90,73 @@ func isMapOp(pass *analysis.Pass, expr ast.Expr) (ast.Expr, bool) {
 	if !ok {
 		return nil, false
 	}
-	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok {
-		return nil, false
-	}
-	fn, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Func)
-	if !ok || fn.Pkg() == nil || !isFluentfpPkg(fn.Pkg().Path()) {
-		return nil, false
-	}
-
-	// Form A: genuine method VALUE call (not a method expression, not a field).
-	if selxn, ok := pass.TypesInfo.Selections[sel]; ok {
-		if selxn.Kind() == types.MethodVal && mapMethods[fn.Name()] {
-			return unparen(sel.X), true
+	// Normalize the callee so an explicitly-instantiated generic call
+	// (`slice.Map[int,string](...)` → *ast.IndexExpr/IndexListExpr) or a
+	// parenthesized callee (`(slice.Map)(...)`) still resolves to its base
+	// selector/ident (IMPL grade).
+	switch callee := normalizeCallee(call.Fun).(type) {
+	case *ast.SelectorExpr:
+		fn, ok := pass.TypesInfo.Uses[callee.Sel].(*types.Func)
+		if !ok || fn.Pkg() == nil || !isFluentfpPkg(fn.Pkg().Path()) {
+			return nil, false
 		}
-		return nil, false
+		// Form A: genuine method VALUE call (not a method expression / field).
+		if selxn, ok := pass.TypesInfo.Selections[callee]; ok {
+			if selxn.Kind() == types.MethodVal && mapMethods[fn.Name()] {
+				return unparen(callee.X), true
+			}
+			return nil, false
+		}
+		// Form B: package-qualified standalone map function via the table.
+		return standaloneSource(fn, call)
+	case *ast.Ident:
+		// Form B via a dot-imported standalone map function (`Map(...)`).
+		fn, ok := pass.TypesInfo.Uses[callee].(*types.Func)
+		if !ok || fn.Pkg() == nil {
+			return nil, false
+		}
+		return standaloneSource(fn, call)
 	}
+	return nil, false
+}
 
-	// Form B: package-qualified standalone map function via the explicit table.
+// standaloneSource returns the data-source arg of a standalone fluentfp map
+// function call when fn is in the explicit table.
+func standaloneSource(fn *types.Func, call *ast.CallExpr) (ast.Expr, bool) {
 	if idx, ok := standaloneMap[fn.Pkg().Path()+"."+fn.Name()]; ok && len(call.Args) > idx {
 		return unparen(call.Args[idx]), true
 	}
 	return nil, false
+}
+
+// calleeNamePos is the position of a call's outer map name (the method/func
+// identifier), for the diagnostic — after the same callee normalization.
+func calleeNamePos(call *ast.CallExpr) token.Pos {
+	switch callee := normalizeCallee(call.Fun).(type) {
+	case *ast.SelectorExpr:
+		return callee.Sel.Pos()
+	case *ast.Ident:
+		return callee.Pos()
+	default:
+		return call.Pos()
+	}
+}
+
+// normalizeCallee strips parentheses and generic-instantiation index nodes from
+// a call's Fun, exposing the base *ast.SelectorExpr or *ast.Ident.
+func normalizeCallee(e ast.Expr) ast.Expr {
+	for {
+		switch x := e.(type) {
+		case *ast.ParenExpr:
+			e = x.X
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.IndexListExpr:
+			e = x.X
+		default:
+			return e
+		}
+	}
 }
 
 // isFluentfpPkg matches the fluentfp module root or any of its subpackages by

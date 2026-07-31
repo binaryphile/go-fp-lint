@@ -71,6 +71,17 @@ func Pos11(xs []int) slice.Mapper[int] {
 		Transform(addOne)  // want `double map`
 }
 
+// Explicitly-instantiated generic standalone maps — callee is IndexListExpr,
+// must still be caught (IMPL grade).
+func Pos12(xs []int) slice.Mapper[string] {
+	return slice.Map[int, string](slice.Map[int, int](xs, idInt), toStr) // want `double map`
+}
+
+// Parenthesized callee wrapping an instantiation — (slice.Map[…])(...).
+func Pos13(xs []int) slice.Mapper[string] {
+	return (slice.Map[int, string])((slice.Map[int, int])(xs, idInt), toStr) // want `double map`
+}
+
 // ---------------- negatives ----------------
 
 // Single map (lambda + named + standalone) — nothing to fuse.
