@@ -80,7 +80,17 @@ runCampaign.processSlot() {
   rm -f $scoreResult
   local resultExists=no resultPass=false mismatches='[]'
   if bash $Here/wire-and-score.sh $delegatePkgDir $oracleWt $scoreResult $journalDir slot$slot 2>/dev/null; then
-    if [[ -f $scoreResult ]]; then
+    # Grade IMPL-F8 fix: the result file is atomically written (write-temp +
+    # rename in wire-and-score.sh's writeResult) but was previously consumed
+    # via bare `jq -r .pass` with no shape/type check — "schema-validated"
+    # was aspirational, not implemented. Validate the required fields exist
+    # with the expected types before trusting the file; a malformed result
+    # (partial write survives some other way, unexpected shape) is now
+    # infra-void via resultExists staying "no", not silently treated as an
+    # analyzer FAIL.
+    if [[ -f $scoreResult ]] \
+      && jq -e 'type=="object" and (.pass|type=="boolean") and (.mismatches|type=="array")' \
+        <$scoreResult >/dev/null 2>&1; then
       resultExists=yes
       resultPass=$(jq -r .pass <$scoreResult)
       mismatches=$(jq -c .mismatches <$scoreResult)
@@ -178,6 +188,32 @@ runCampaign.preflight() {
   return 0
 }
 
+# runCampaign.cleanupSlot removes ALL per-slot ephemeral artifacts for `slot`
+# — the clone, the per-slot module cache, AND the raw claude result files
+# (grade IMPL-F1: these previously survived indefinitely in /tmp, silently
+# contradicting the UserSov S3 disposition's claim that the raw
+# --output-format json object — which contains the free-text `result` field,
+# outside the S3 allowlist — is deleted after extraction). Safe to call
+# multiple times (idempotent); safe to call when some paths don't exist.
+runCampaign.cleanupSlot() {
+  local slot=$1
+  local slotClone=/tmp/slot-$(printf '%02d' $slot)-clone
+  local slotGomodcache=/tmp/slot-$(printf '%02d' $slot)-gomodcache
+  chmod -R u+w $slotGomodcache 2>/dev/null ||:
+  rm -rf $slotClone $slotGomodcache $slotClone.raw-result.json $slotClone.raw-result.json.stderr
+}
+
+# runCampaign.cleanupAllSlots is the crash-safety backstop (grade IMPL-F1):
+# registered as an EXIT trap so an unexpected script death mid-campaign
+# still sweeps every possible slot's ephemeral artifacts, not just the ones
+# reached by a normal per-iteration cleanupSlot call.
+runCampaign.cleanupAllSlots() {
+  local -i s
+  for (( s = 1; s <= 20; s++ )); do
+    runCampaign.cleanupSlot $s
+  done
+}
+
 main() {
   local journalDir=$1 resultsDir=$2
   local oracleWt=$HOME/projects/go-fp-lint-oracle-c9fc0bf
@@ -185,11 +221,20 @@ main() {
   local refBrokenDir=$Here/refpkgs/broken
   local sourceRepo=$HOME/projects/go-fp-lint
 
+  trap runCampaign.cleanupAllSlots EXIT
+
   runCampaign.preflight $oracleWt $refCorrectDir $refBrokenDir || { echo 'HALT: pre-flight failed' >&2; return 1; }
 
   local vectorSha=$(printf '%s' "${FrozenVector[*]}" | sha256sum | cut -d' ' -f1)
   local campaign=$(journal.Init $journalDir $vectorSha)
   echo "campaign: $campaign (vector_sha=$vectorSha)"
+
+  # Grade IMPL-F4 fix: acquire the exclusive campaign lock (journal.bash's
+  # own docstring already claimed this happened; it was defined but never
+  # called). Held for the life of this process; a second concurrent driver
+  # invocation on the same journalDir now genuinely refuses rather than
+  # racing journal writes.
+  journal.Lock $journalDir || { echo 'HALT: another campaign process holds the lock on this journal' >&2; return 1; }
 
   local oracleBlobSha=$(cd $oracleWt && git rev-parse HEAD:experiments/causalarm91119/refcorrect.go)
 
@@ -204,9 +249,17 @@ main() {
     fi
     if [[ $state == dispatched ]]; then
       echo "slot $slot ($arm): possibly-launched from a prior crashed run"
-      local proven=$(journal.KillAndProve $journalDir/../slot-$(printf '%02d' $slot)-clone 30)
+      # Grade IMPL-F2/F3 fix: (1) the search path must be the REAL clone path
+      # dispatch.Run actually used (/tmp/slot-NN-clone), not the previous
+      # broken $journalDir/../... construction, which never matched any real
+      # process argv and so could silently "prove" a live delegate dead.
+      # (2) proof MUST be confirmed BEFORE the terminal infra-void record is
+      # written — recording first meant a failed proof still left the slot
+      # permanently closed despite the HALT that was supposed to follow.
+      local slotCloneForRecovery=/tmp/slot-$(printf '%02d' $slot)-clone
+      local proven=$(journal.KillAndProve $slotCloneForRecovery 30)
+      [[ $proven == 1 ]] || { echo "HALT: could not prove slot $slot's process terminated -- NOT recorded, do not resume without manual investigation" >&2; return 1; }
       journal.Record $journalDir $slot infra-void possibly_launched_prior_crash '{}'
-      [[ $proven == 1 ]] || { echo "HALT: could not prove slot $slot's process terminated" >&2; return 1; }
       echo "slot $slot: marked infra-void (possibly-launched, never re-run); continuing at $((slot + 1))"
       continue
     fi
@@ -217,7 +270,7 @@ main() {
 
     local slotClone=/tmp/slot-$(printf '%02d' $slot)-clone
     local slotGomodcache=/tmp/slot-$(printf '%02d' $slot)-gomodcache
-    chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
+    runCampaign.cleanupSlot $slot
 
     if ! dispatch.CloneAndIsolate $sourceRepo preoracle-base $slotClone $oracleBlobSha; then
       journal.Record $journalDir $slot infra-void clone_isolation_failed '{}'
@@ -239,13 +292,13 @@ main() {
     if ! pkgDir_=$(runCampaign.discoverDelegatePkg $slotClone); then
       journal.Record $journalDir $slot fail no_matching_module '{}'
       echo "slot $slot: FAIL (no matching delegate module); continuing"
-      chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
+      runCampaign.cleanupSlot $slot
       continue
     fi
 
     local slotOutcome=$(runCampaign.processSlot $journalDir $slot $arm "$pkgDir_" $rawResult $oracleWt $refCorrectDir)
     echo "slot $slot ($arm): $slotOutcome"
-    chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
+    runCampaign.cleanupSlot $slot
 
     if [[ ${slotOutcome%% *} == infra-void ]]; then
       echo "HALT: slot $slot infra-void (${slotOutcome#* }) — systemic scorer/infra problem, not a delegate failure" >&2

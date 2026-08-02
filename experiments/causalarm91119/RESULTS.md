@@ -11,9 +11,10 @@ the frozen execution semantics: `harness/README.md` and the tandem plan
 
 > *Given the frozen briefs (App A/B) and the frozen hidden oracle (App C), on
 > the single go-fp-lint type-aware vehicle of §3, at the ACTUAL completed n
-> (T: [x/10], N: [y/9] — see "Campaign status" below, this run did NOT reach
+> (T: 0/10, N: 0/9 — see "Campaign status" below, this run did NOT reach
 > the preregistered n=10/arm): the technique-explicit brief variant's pass
-> rate on THIS vehicle was [x] vs the normal brief variant's [y].*
+> rate on THIS vehicle was 0/10 vs the normal brief variant's 0/9 — no
+> detectable difference, both arms at floor.*
 
 ## What is forbidden in this report (prereg §1, unchanged)
 
@@ -42,10 +43,17 @@ zero-cost pre-flight mechanism check now guards against recurrence), ran to
 completion — all 20 slots reached a terminal journal state. **But it is
 still not the frozen n=10/arm result**: slot 3 (arm N) went `infra-void`
 when the orchestrator killed the background run mid-dispatch to investigate
-an unrelated discovery-rate question (verified no process survived; per the
-frozen no-repair/no-backfill policy this is excluded and counted, never
+an unrelated discovery-rate question. Its disposition was recorded via a
+**manual, out-of-band `journal.Record` call**, not the coded automatic
+recovery path — the mandatory IMPL grade found the coded recovery branch
+itself had a latent path bug (it searched the wrong clone path and, in that
+buggy state, could have falsely "proven" a live process dead), since fixed
+(see `harness/README.md` post-execution-honesty addendum). Process
+termination for slot 3 was instead confirmed manually via direct `pgrep`
+against the actual clone path before recording. Per the frozen
+no-repair/no-backfill policy this slot is excluded and counted, never
 backfilled — see journal `slot-03.json`, reason
-`driver_killed_mid_dispatch_for_investigation`).
+`driver_killed_mid_dispatch_for_investigation`.
 
 Per the frozen infra-void terminal-semantics rule (tandem plan, absorbed
 from grade R3-1): **any nonzero infra-void count means this campaign is
@@ -69,12 +77,21 @@ before this report was written, specifically to rule out a residual harness
 bug given campaign-1's history:
 
 - **10/19 valid slots ({1,2,7,9,10,11,12,15,17,18} — 5 T, 5 N)**: `delegate
-  module not discoverable` (`no_matching_module`). Verified via an out-of-band
-  diagnostic dispatch (real frozen brief text, not scored against the vector)
-  that the fixed harness DOES correctly discover a delegate's module when one
-  is placed in the expected location — this is genuine delegate placement
-  variance across a 15–88 turn autonomous coding session, not a recurrence of
-  campaign-1's bug.
+  module not discoverable` (`no_matching_module`). Two out-of-band diagnostic
+  dispatches (real frozen brief text, not scored against the vector, clone
+  retained) confirmed the fixed harness CAN correctly discover a delegate's
+  module when one is placed in the expected location — ruling out a
+  recurrence of campaign-1's cwd bug as the MECHANISM. That evidence is
+  indirect, not per-slot: each of the 10 real campaign-2 slots' clones was
+  already deleted by cleanup before this report was written, so the specific
+  cause for each individual slot (genuine placement variance across a
+  15–88 turn autonomous session vs. some other explanation) is inferred, not
+  directly confirmed case-by-case. The defensible finding is narrower than
+  earlier drafts of this report claimed: **no matching module was
+  discoverable under the delivery contract** for these 10 slots; the
+  mechanism-level diagnostic rules out the specific campaign-1 defect as the
+  cause, but does not by itself prove the cause was delegate placement choice
+  for every one of the 10.
 - **3/19 valid slots ({8,19,20} — 2 T, 1 N)**: delegate module found, but
   scoring produced no result file after a healthy scorer-control bracket
   (`no_result_file_scorer_healthy`) — the delegate's own analyzer failed to

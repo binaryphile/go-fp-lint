@@ -99,10 +99,15 @@ journal.Dispatch() {
 
 # journal.Record writes the TERMINAL, immutable record for `slot` — status,
 # reason, and the metrics object (a JSON string). This is the sole source of
-# truth `slots.jsonl` and the stream events are derived from.
+# truth `slots.jsonl` and the stream events are derived from. Refuses to
+# overwrite an already-`recorded` slot (grade IMPL-F4 — previously this
+# silently accepted a second call and clobbered the terminal record with no
+# trace of the original).
 journal.Record() {
   local journalDir=$1 slot=$2 status=$3 reason=$4 metricsJson=$5
   local f=$journalDir/slot-$(printf '%02d' $slot).json
+  local priorState=$(journal.SlotState $journalDir $slot)
+  [[ $priorState != recorded ]] || { echo "journal.Record: slot $slot already recorded — refusing to overwrite a terminal record" >&2; return 1; }
   local cur=$(cat $f)
   journal.atomicWrite $f "$(jq --arg st $status --arg r $reason --argjson m "$metricsJson" \
     '.state="recorded" | .status=$st | .reason=$r | .metrics=$m | .recorded_at=(now|todate)' <<<$cur)"
