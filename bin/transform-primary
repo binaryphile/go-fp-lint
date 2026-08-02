@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# transform-primary runs go-fp-lint's WRITE->TRANSFORM->LINT pipeline over a
+# package: pre-fix diagnostics, an in-place -fix pass, a post-fix compile
+# re-check, and post-fix residual diagnostics. See docs/design.md and jeeves
+# #87588. Default analyzer scope is every shipped analyzer (the general
+# pipeline); --only narrows to a specific subset for a single measurement.
+
+Prog=$(basename "$0")
+
+read -rd '' Usage <<END
+Usage:
+  $Prog [--only ANALYZER1,ANALYZER2,...] PACKAGE_DIR
+
+  Default (no --only): every shipped analyzer applies its -fix. --only
+  restricts both the PRE/POST diagnostic passes and the FIX pass to exactly
+  the named analyzer(s) -- a deliberate narrowing, not the tool's identity.
+
+  Emits one JSON summary on stdout:
+    {"compiled": bool, "post_fix_compiled": bool|null, "pre_count": int|null,
+     "post_count": int|null, "residual": bool|null}
+  null fields mean "not applicable, short-circuited upstream."
+END
+
+# Every analyzer go-fp-lint's multichecker ships (cmd/go-fp-lint/main.go) --
+# used to compute the --only disable-flag set.
+AllAnalyzers=( filterloop impuresource impurereach nestedcall mapshape recvshape aliaswrite chainlambda chainlayout internalmock methodexpr mapfusion )
+
+# DisableFlags holds the `-<analyzer>=false` args disabling every shipped
+# analyzer NOT in --only's list. Bootstrap-initialized once by
+# computeDisableFlags at the top of main; read-only thereafter.
+DisableFlags=()
+
+# main parses args, builds the binary, and runs the four-stage pipeline,
+# printing the frozen JSON summary to stdout.
+main() {
+  local only_='' pkgDir=''
+  while (( $# > 0 )); do
+    case $1 in
+      --only ) only_=$2; shift 2;;
+      -h|--help ) echo $Usage; exit;;
+      * ) pkgDir=$1; shift;;
+    esac
+  done
+  [[ -n $pkgDir ]] || fatal $Usage 64
+
+  computeDisableFlags "$only_"
+
+  local repoRoot_
+  # shellcheck disable=SC2128 # BASH_SOURCE always has at least one element
+  repoRoot_=$(cd $(dirname $BASH_SOURCE)/.. && pwd)
+  local repoRoot=$repoRoot_
+
+  local bin=$repoRoot/go-fp-lint
+  ( cd $repoRoot && $go build -o $bin ./cmd/go-fp-lint ) \
+    || fatal 'go build ./cmd/go-fp-lint failed' 1
+
+  local preBlock_
+  preBlock_=$(runPass $bin $pkgDir '')
+  [[ $(passField compiled "$preBlock_") == true ]] || { emitSummary false null null null null; return; }
+  local preCount_
+  preCount_=$(passField count "$preBlock_")
+  local preCount=$preCount_
+
+  local fixBlock_
+  fixBlock_=$(runPass $bin $pkgDir -fix)
+  if [[ $(passField compiled "$fixBlock_") != true ]]; then
+    # FIX pass itself failed to load/run -- an infrastructure failure, same
+    # short-circuit as the PRE pass's own compile check.
+    emitSummary false null null null null
+    return
+  fi
+
+  local postBlock_
+  postBlock_=$(runPass $bin $pkgDir '')
+  if [[ $(passField compiled "$postBlock_") != true ]]; then
+    emitSummary true false $preCount null null
+    return
+  fi
+  local postCount_
+  postCount_=$(passField count "$postBlock_")
+  local postCount=$postCount_
+
+  local residual=false
+  (( postCount > 0 )) && residual=true
+  emitSummary true true $preCount $postCount $residual
+}
+
+# computeDisableFlags populates the global DisableFlags array with
+# `-<analyzer>=false` for every shipped analyzer NOT in `onlyCsv`
+# (comma-separated). An empty `onlyCsv` disables nothing -- the default,
+# general-pipeline scope. Called once from main.
+computeDisableFlags() {
+  local onlyCsv=$1
+  DisableFlags=()
+  [[ -n $onlyCsv ]] || return 0
+
+  local a
+  for a in "${AllAnalyzers[@]}"; do
+    [[ ,$onlyCsv, == *,$a,* ]] || DisableFlags+=( "-$a=false" )
+  done
+}
+
+# runPass runs `bin` against `pkgDir` with the global DisableFlags and
+# optional `fixFlag` ('-fix' or empty), and prints a small key=value block
+# for `passField` to parse. Classification is keyed on the "<analyzer>:
+# analysis skipped due to errors in package" marker go-fp-lint's
+# multichecker driver emits on a real load/type-check failure -- confirmed
+# empirically (jeeves #87588 Phase 3a) to be the reliable signal, NOT "does
+# a line match the <file>:<line>:<col>: shape" (a compile error's own
+# message matches that shape too, so position-shape alone cannot
+# distinguish a diagnostic from a compile failure).
+runPass() {
+  local bin=$1 pkgDir=$2 fixFlag=$3
+
+  local stderr_
+  stderr_=$(cd $pkgDir && timeout 60 $bin "${DisableFlags[@]}" $fixFlag ./... 2>&1 1>/dev/null) ||:
+
+  if [[ $stderr_ == *'analysis skipped due to errors in package'* ]]; then
+    echo 'compiled=false'
+    return
+  fi
+
+  local -i count=0
+  local line=''
+  while IFS='' read -r line; do
+    [[ -n $line ]] || continue
+    count+=1
+  done <<<"$stderr_"
+
+  echo 'compiled=true'
+  echo count=$count
+}
+
+# passField extracts `field`'s value from a runPass key=value `block_`. (C)
+passField() {
+  local field=$1 block_=$2
+  echo "$block_" | grep ^$field= | cut -d= -f2
+}
+
+# emitSummary prints the frozen JSON schema to stdout. Each bool-typed arg
+# is the literal string true, false, or null.
+emitSummary() {
+  local compiled=$1 postFixCompiled=$2 preCount=$3 postCount=$4 residual=$5
+  printf '{"compiled": %s, "post_fix_compiled": %s, "pre_count": %s, "post_count": %s, "residual": %s}\n' \
+    $compiled $postFixCompiled $preCount $postCount $residual
+}
+
+# fatal prints `msg` to stderr and exits with `rc` (default 1).
+fatal() {
+  local msg=$1 rc=${2:-1}
+  echo $msg >&2
+  exit $rc
+}
+
+go=${go:-go}
+
+return 2>/dev/null
+
+IFS=$'\n'
+set -o noglob
+set -uo pipefail
+
+set -e
+main "$@"
