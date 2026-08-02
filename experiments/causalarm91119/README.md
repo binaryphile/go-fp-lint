@@ -46,6 +46,7 @@ version fixes those (findings F4/F5/F6).
 | 5 pointer/value on fluent | `a.Case5v`/`a.Case5p` | yes | flag both |
 | 5b pointer/value on unrelated | `a.Case5other` | yes | no flag |
 | 7 isolated TRUE no-op package (no `Map` at all) | `b` | yes | no diagnostics (both refs agree) |
+| 8 DIFFERENT fluentfp type with `Map` (`option.Option`) | `a.Case8` | yes | **no flag** (broad-namespace analyzer would FALSELY flag — R4 New-3) |
 | **6 method value / method expression** | — | **OUT OF SCOPE** | see below |
 
 **Case 6 — coherent contract boundary (resolves the v1 §3-vs-App-C
@@ -86,8 +87,10 @@ via `git show <sha>`. The delegate base MUST therefore be a **fresh shallow
 clone at a PRE-ORACLE commit** (`git clone --depth 1 --branch <pre-oracle-ref>`,
 or a filtered clone), whose object store does not contain the oracle at all; the
 oracle is mounted **independently** into the scoring module at scoring time (see
-`Score` in `score.go`). Verify the base predates the oracle with
-`git merge-base --is-ancestor <delegate-base> <oracle-commit>` before dispatch.
+`Score` in `score.go`). Verify the base predates the oracle by the oracle file being
+**ABSENT** there — `! git cat-file -e <delegate-base>:experiments/causalarm91119/refcorrect.go`
+— a stronger check than `git merge-base --is-ancestor` (which is also true for the oracle
+commit itself). Run this before dispatch.
 
 ## Mechanical scoring adapter (R2 F7/New-3)
 
