@@ -22,7 +22,13 @@ FrozenVector=( T N N N T T N T T N N T N N T N T T T N )
 # result file with pass=false, is a genuine delivery FAIL (never infra-void)
 # — the classifier does NOT distinguish "delegate compile error" from
 # "delegate panic" from "wrong analyzer": all are FAIL once the scorer is
-# proven healthy on both sides. Echoes "status reason" (two words).
+# proven healthy on both sides. `resultFileExists` is a THREE-state value —
+# "yes" / "no" / "malformed" (grade IMPL-R2-2): "malformed" means the scorer
+# process exited and left a file, but it failed the shape check (not valid
+# JSON, or missing/mistyped required fields) — that is scorer/harness
+# corruption, NOT a delegate failure, and must never be silently folded into
+# the same bucket as "delegate produced nothing." Echoes "status reason"
+# (two words).
 runCampaign.classify() {
   local controlBeforeHealthy=$1 controlAfterHealthy=$2 resultFileExists=$3 resultPass=$4
 
@@ -32,6 +38,10 @@ runCampaign.classify() {
   fi
   if [[ $controlAfterHealthy != healthy ]]; then
     echo 'infra-void scorer_control_after_failed'
+    return
+  fi
+  if [[ $resultFileExists == malformed ]]; then
+    echo 'infra-void scorer_result_malformed'
     return
   fi
   if [[ $resultFileExists != yes ]]; then
@@ -80,18 +90,25 @@ runCampaign.processSlot() {
   rm -f $scoreResult
   local resultExists=no resultPass=false mismatches='[]'
   if bash $Here/wire-and-score.sh $delegatePkgDir $oracleWt $scoreResult $journalDir slot$slot 2>/dev/null; then
-    # Grade IMPL-F8 fix: the result file is atomically written (write-temp +
-    # rename in wire-and-score.sh's writeResult) but was previously consumed
-    # via bare `jq -r .pass` with no shape/type check — "schema-validated"
-    # was aspirational, not implemented. Validate the required fields exist
-    # with the expected types before trusting the file; a malformed result
-    # (partial write survives some other way, unexpected shape) is now
-    # infra-void via resultExists staying "no", not silently treated as an
-    # analyzer FAIL.
-    if [[ -f $scoreResult ]] \
-      && jq -e 'type=="object" and (.pass|type=="boolean") and (.mismatches|type=="array")' \
+    # Grade IMPL-F8/R2-2 fix: the result file is atomically written
+    # (write-temp + rename in wire-and-score.sh's writeResult) but was
+    # previously consumed via bare `jq -r .pass` with no shape/type check —
+    # "schema-validated" was aspirational, not implemented. Validate the
+    # required fields exist with the expected types before trusting the
+    # file. A file that EXISTS but fails this check is scorer/harness
+    # corruption, not a delegate failure — `resultExists=malformed` routes
+    # to infra-void via runCampaign.classify, distinct from the genuine
+    # "no file at all" FAIL case (resultExists stays "no" only when the
+    # file was never produced).
+    if [[ -f $scoreResult ]]; then
+      if jq -e 'type=="object" and (.pass|type=="boolean") and (.mismatches|type=="array")' \
         <$scoreResult >/dev/null 2>&1; then
-      resultExists=yes
+        resultExists=yes
+      else
+        resultExists=malformed
+      fi
+    fi
+    if [[ $resultExists == yes ]]; then
       resultPass=$(jq -r .pass <$scoreResult)
       mismatches=$(jq -c .mismatches <$scoreResult)
     fi
@@ -106,7 +123,16 @@ runCampaign.processSlot() {
     --argjson m "$mismatches" --arg cb $controlBefore --arg ca $controlAfter \
     '$c + {score_pass:$p, mismatches:$m, control_before:$cb, control_after:$ca}')
 
-  journal.Record $journalDir $slot $status $reason "$combinedMetrics"
+  # Grade IMPL-R2-4 fix: journal.Record's failure (e.g. the R1-F5
+  # already-recorded guard) was previously swallowed — `local x=$(...)` at
+  # the call site masks a command substitution's exit code (this is
+  # SC2155's exact warning), and the two statements after Record here always
+  # succeed, so main() never saw a failure. Propagate it explicitly.
+  journal.Record $journalDir $slot $status $reason "$combinedMetrics" || {
+    rm -f $scoreResult
+    echo "infra-void journal_record_failed"
+    return 1
+  }
   rm -f $scoreResult
 
   echo "$status $reason"
@@ -203,10 +229,14 @@ runCampaign.cleanupSlot() {
   rm -rf $slotClone $slotGomodcache $slotClone.raw-result.json $slotClone.raw-result.json.stderr
 }
 
-# runCampaign.cleanupAllSlots is the crash-safety backstop (grade IMPL-F1):
-# registered as an EXIT trap so an unexpected script death mid-campaign
-# still sweeps every possible slot's ephemeral artifacts, not just the ones
-# reached by a normal per-iteration cleanupSlot call.
+# runCampaign.cleanupAllSlots is a BEST-EFFORT crash-safety backstop (grade
+# IMPL-F1/R2-6) — registered as an EXIT trap AFTER the campaign lock is
+# acquired (grade IMPL-R2-1: never before, so a process that loses the lock
+# race never registers this destructive trap against another holder's
+# in-flight artifacts). Covers ordinary exits, `set -e` aborts, and most
+# signals bash traps — it CANNOT run after SIGKILL, a host crash, or power
+# loss, and it does not itself verify an orphaned dispatch process has
+# terminated before removing its clone. Not a guarantee; a residual sweep.
 runCampaign.cleanupAllSlots() {
   local -i s
   for (( s = 1; s <= 20; s++ )); do
@@ -221,20 +251,23 @@ main() {
   local refBrokenDir=$Here/refpkgs/broken
   local sourceRepo=$HOME/projects/go-fp-lint
 
-  trap runCampaign.cleanupAllSlots EXIT
-
   runCampaign.preflight $oracleWt $refCorrectDir $refBrokenDir || { echo 'HALT: pre-flight failed' >&2; return 1; }
 
   local vectorSha=$(printf '%s' "${FrozenVector[*]}" | sha256sum | cut -d' ' -f1)
   local campaign=$(journal.Init $journalDir $vectorSha)
   echo "campaign: $campaign (vector_sha=$vectorSha)"
 
-  # Grade IMPL-F4 fix: acquire the exclusive campaign lock (journal.bash's
-  # own docstring already claimed this happened; it was defined but never
-  # called). Held for the life of this process; a second concurrent driver
-  # invocation on the same journalDir now genuinely refuses rather than
-  # racing journal writes.
+  # Grade IMPL-R2-1 fix: acquire the exclusive campaign lock BEFORE
+  # registering the cleanup trap. Slot artifact paths are global
+  # (/tmp/slot-NN-clone, unnamespaced by campaign), so a process that loses
+  # the lock race must NEVER register the destructive cleanup trap — R1's
+  # placement (trap registered unconditionally at function entry) meant a
+  # losing process still ran cleanupAllSlots on exit and could delete the
+  # LOCK-HOLDING process's in-flight clone/gomodcache/raw-result files
+  # mid-dispatch. Only the actual lock holder may own cleanup responsibility
+  # for these shared paths.
   journal.Lock $journalDir || { echo 'HALT: another campaign process holds the lock on this journal' >&2; return 1; }
+  trap runCampaign.cleanupAllSlots EXIT
 
   local oracleBlobSha=$(cd $oracleWt && git rev-parse HEAD:experiments/causalarm91119/refcorrect.go)
 
@@ -290,13 +323,21 @@ main() {
 
     local pkgDir_
     if ! pkgDir_=$(runCampaign.discoverDelegatePkg $slotClone); then
-      journal.Record $journalDir $slot fail no_matching_module '{}'
+      journal.Record $journalDir $slot fail no_matching_module '{}' \
+        || { echo "HALT: slot $slot journal.Record failed" >&2; return 1; }
       echo "slot $slot: FAIL (no matching delegate module); continuing"
       runCampaign.cleanupSlot $slot
       continue
     fi
 
-    local slotOutcome=$(runCampaign.processSlot $journalDir $slot $arm "$pkgDir_" $rawResult $oracleWt $refCorrectDir)
+    # Grade IMPL-R2-4 fix: declare-then-assign (not `local x=$(cmd)`, which
+    # masks the command substitution's exit code — SC2155) so a
+    # processSlot failure (e.g. journal.Record refusing an overwrite) is
+    # actually visible and halts, instead of main() silently printing a
+    # stale-looking success line.
+    local slotOutcome
+    slotOutcome=$(runCampaign.processSlot $journalDir $slot $arm "$pkgDir_" $rawResult $oracleWt $refCorrectDir) \
+      || { echo "HALT: slot $slot processSlot failed ($slotOutcome)" >&2; runCampaign.cleanupSlot $slot; return 1; }
     echo "slot $slot ($arm): $slotOutcome"
     runCampaign.cleanupSlot $slot
 

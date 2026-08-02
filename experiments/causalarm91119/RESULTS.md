@@ -161,10 +161,14 @@ data, and carries no expiry commitment.
 
 **This arm did not produce a usable pass-rate comparison.** At the actual
 completed n (T:0/10, N:0/9), neither brief variant enabled Haiku 4.5 to fully
-satisfy this oracle's strict exact-message contract on this vehicle. The
-observed failure modes (module discoverability variance, compile/panic
-failures, and — most informatively — a consistent generic-type-formatting
-miss on the exact-message check) are real, individually-verified, and
-arm-independent. Whether a brief variant that explicitly warns about Go's
-generic type-string formatting would clear this floor is an open question
-this run cannot answer and this report does not speculate on.
+satisfy this oracle's strict exact-message contract on this vehicle. Three
+failure modes were observed, arm-independent: no matching delegate module
+discoverable under the delivery contract (10/19 — the SPECIFIC per-slot
+cause is not individually confirmed, only that the campaign-1 harness defect
+is ruled out as the mechanism); delegate compile/panic failures (3/19); and
+— the most informatively confirmed pattern, directly verified against the
+mismatch data itself, not inferred — a consistent generic-type-formatting
+miss on the exact-message check (6/19). Whether a brief variant that
+explicitly warns about Go's generic type-string formatting would clear this
+floor is an open question this run cannot answer and this report does not
+speculate on.
