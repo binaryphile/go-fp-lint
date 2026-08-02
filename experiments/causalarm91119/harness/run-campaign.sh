@@ -217,7 +217,7 @@ main() {
 
     local slotClone=/tmp/slot-$(printf '%02d' $slot)-clone
     local slotGomodcache=/tmp/slot-$(printf '%02d' $slot)-gomodcache
-    rm -rf $slotClone $slotGomodcache
+    chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
 
     if ! dispatch.CloneAndIsolate $sourceRepo preoracle-base $slotClone $oracleBlobSha; then
       journal.Record $journalDir $slot infra-void clone_isolation_failed '{}'
@@ -239,13 +239,13 @@ main() {
     if ! pkgDir_=$(runCampaign.discoverDelegatePkg $slotClone); then
       journal.Record $journalDir $slot fail no_matching_module '{}'
       echo "slot $slot: FAIL (no matching delegate module); continuing"
-      rm -rf $slotClone $slotGomodcache
+      chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
       continue
     fi
 
     local slotOutcome=$(runCampaign.processSlot $journalDir $slot $arm "$pkgDir_" $rawResult $oracleWt $refCorrectDir)
     echo "slot $slot ($arm): $slotOutcome"
-    rm -rf $slotClone $slotGomodcache
+    chmod -R u+w $slotGomodcache 2>/dev/null ||:; rm -rf $slotClone $slotGomodcache
 
     if [[ ${slotOutcome%% *} == infra-void ]]; then
       echo "HALT: slot $slot infra-void (${slotOutcome#* }) — systemic scorer/infra problem, not a delegate failure" >&2
