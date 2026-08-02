@@ -1,0 +1,14 @@
+{
+  "alpha": 0.05,
+  "ci": 0.95,
+  "fisher": "two-sided",
+  "arm_order": "T_minus_N",
+  "effect_sign": "positive_means_T_higher",
+  "infra_void_denominator": "exclude",
+  "n_per_arm_frozen": 10,
+  "interpretation": {
+    "significant_T_gt_N": "directional support: the technique-explicit brief BUNDLE raised pass rate on this vehicle",
+    "significant_N_gt_T": "the technique-explicit brief BUNDLE lowered (hurt) pass rate on this vehicle",
+    "not_significant": "inconclusive / insufficient to reject no-association under this design (NOT evidence of no effect; NOT attributed to power)"
+  }
+}

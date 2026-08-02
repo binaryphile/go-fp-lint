@@ -1,0 +1,52 @@
+{
+  "purpose": "Freeze-before-dispatch manifest (prereg #93569; grade R2-10). Every pin here is fixed BEFORE slot 1 of the 20-slot frozen App-D campaign. The intervention apparatus itself must be frozen, not just the assignment vector.",
+  "frozen_at": "2026-08-02",
+  "vector": {
+    "arms": ["T","N","N","N","T","T","N","T","T","N","N","T","N","N","T","N","T","T","T","N"],
+    "n_per_arm": 10,
+    "seed_method": "Python random.Random(91119).shuffle(['N']*10 + ['T']*10)",
+    "source": "jeeves investigations/2026-08-01-model-routing-causal-arm-preregistration.md Appendix D"
+  },
+  "briefs": {
+    "arm_N_sha256": "f3ba210581758f05d3b8d4cf7f6011a2143d1963eb3959699e3859e17edf1084",
+    "arm_T_sha256": "479d9e87b3cbaab5ec2245fc6116bdc99ac353299646dc464ae7dca2547c4be3",
+    "extraction": "programmatic byte-exact extraction from the frozen prereg's Appendix A/B blockquotes; shared goal+delivery paragraphs verified byte-identical between arms before freeze"
+  },
+  "delegate": {
+    "model": "claude-haiku-4-5-20251001",
+    "claude_cli_version": "2.1.204 (Claude Code)",
+    "invocation": "claude -p \"<brief>\" --model claude-haiku-4-5-20251001 --output-format json --permission-mode bypassPermissions",
+    "timeout_seconds": 900,
+    "delivery_contract": "package fluentmap at module path example.com/delegate/fluentmap, exports var Analyzer *analysis.Analyzer"
+  },
+  "oracle": {
+    "commit": "c9fc0bfa8973d1e8f608074eed2b1f6eabd4fdd3",
+    "worktree": "~/projects/go-fp-lint-oracle-c9fc0bf (detached)",
+    "full_tree_sha256": "cc234cbdbd24861881177a8ee14aa3e2721c5a778720caa30136f141b3d3c75c",
+    "full_tree_hash_method": "sha256sum of every file under experiments/causalarm91119/ (sorted paths), piped through sha256sum again",
+    "verified_clean": "git status --porcelain empty at freeze time (no dirty/untracked files)"
+  },
+  "preoracle_base": {
+    "commit": "1eac46e0b9ffa20dd42e2505bb68e4ac6786ae2b",
+    "tag": "preoracle-base",
+    "verified_absent": "experiments/causalarm91119/refcorrect.go confirmed absent via git ls-tree at this commit"
+  },
+  "scoring_env": {
+    "go_binary": "/nix/store/1xklj6dmgcpgz60c9w2ynaq7ynzfsrrq-go-1.26.4/bin/go (direct nix-store; bin/go wrapper hangs headless)",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOFLAGS": "-mod=mod",
+    "x_tools_pinned_version": "v0.48.0",
+    "x_tools_zip_sha256": "8529e7bd696890fd79d3e1c37c7d1a3e2e26fb4b392b5beebfa7134ad2f65755",
+    "gocache": "harness/.gocache (shared, content-addressed — safe to reuse across scoring calls, not a contamination vector)"
+  },
+  "delegate_sandbox": {
+    "tool": "dojo (bwrap-based), commit 84a48a8c0ce5d4f30d776cf5e92ed3f337b5eaa6",
+    "isolation": "fresh --depth 1 --no-local clone at preoracle-base tag; git remote remove origin; dojo --hide ~/projects (removes oracle + source repo visibility); --persist <slot clone> + --persist <fresh empty per-slot GOMODCACHE dir> (writable); network left available (required for the Anthropic API)",
+    "verified_per_slot": "no remotes; oracle path absent; oracle blob unreachable via git cat-file -e (checked before every dispatch)"
+  },
+  "analysis_config_sha256": "bbe2ffbe65a8e73f86af75cbf587d13fde5a26cec1e70ab35088300bc4f1c24b",
+  "stats_refs_sha256": "2337c8a10514be321e2a5812c2f9a3ce3b92830d4b16fb9c839f01acd687d98d",
+  "harness_commit": "RECORDED_AS_THE_GIT_COMMIT_THAT_ADDS_THIS_FILE — see go-fp-lint git log for experiments/causalarm91119/harness/ at freeze time; not embedded here to avoid a self-referential hash"
+}
