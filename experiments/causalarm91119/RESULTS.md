@@ -3,9 +3,11 @@
 Executes the frozen randomized normal-brief-vs-technique-brief causal arm
 preregistered at jeeves #91119
 (`investigations/2026-08-01-model-routing-causal-arm-preregistration.md`).
-Full harness design, the R1–R4 adversarial grade trajectory (F→D→B→A), and
-the frozen execution semantics: `harness/README.md` and the tandem plan
-`~/.claude/plans/93569-idempotent-meandering-kitten.md`.
+Full harness design, the PLAN-STAGE R1–R4 adversarial grade trajectory
+(F→D→B→A, run before implementation began — distinct from the separate
+Completion-Gate IMPL grade sequence that reviewed the code in this
+directory), and the frozen execution semantics: `harness/README.md` and the
+tandem plan `~/.claude/plans/93569-idempotent-meandering-kitten.md`.
 
 ## Strongest defensible claim (prereg §1, restated)
 

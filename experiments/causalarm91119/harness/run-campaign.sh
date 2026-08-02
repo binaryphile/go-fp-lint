@@ -256,7 +256,13 @@ main() {
   runCampaign.preflight $oracleWt $refCorrectDir $refBrokenDir || { echo 'HALT: pre-flight failed' >&2; return 1; }
 
   local vectorSha=$(printf '%s' "${FrozenVector[*]}" | sha256sum | cut -d' ' -f1)
-  local campaign=$(journal.Init $journalDir $vectorSha)
+  # Grade IMPL-R4-1 fix: declare-then-assign (not `local x=$(cmd)`, which
+  # masks the substitution's exit code — the same SC2155 pattern fixed
+  # elsewhere) so a journal.Init failure halts instead of silently
+  # proceeding with an empty/unusable campaign id.
+  local campaign
+  campaign=$(journal.Init $journalDir $vectorSha) \
+    || { echo 'HALT: journal.Init failed' >&2; return 1; }
   echo "campaign: $campaign (vector_sha=$vectorSha)"
 
   # Grade IMPL-R2-1 fix: acquire the exclusive campaign lock BEFORE
@@ -271,12 +277,23 @@ main() {
   journal.Lock $journalDir || { echo 'HALT: another campaign process holds the lock on this journal' >&2; return 1; }
   trap runCampaign.cleanupAllSlots EXIT
 
-  local oracleBlobSha=$(cd $oracleWt && git rev-parse HEAD:experiments/causalarm91119/refcorrect.go)
+  # Grade IMPL-R4-1 fix: same masking risk — an empty oracleBlobSha would
+  # let dispatch.CloneAndIsolate's isolation check compare against an empty
+  # string instead of halting, a much worse failure mode than a clean HALT.
+  local oracleBlobSha
+  oracleBlobSha=$(cd $oracleWt && git rev-parse HEAD:experiments/causalarm91119/refcorrect.go) \
+    || { echo 'HALT: could not resolve the oracle blob SHA' >&2; return 1; }
 
   local -i slot
   for (( slot = 1; slot <= 20; slot++ )); do
     local arm=${FrozenVector[$((slot - 1))]}
-    local state=$(journal.SlotState $journalDir $slot)
+    # Grade IMPL-R4-1 fix: same masking risk — an empty/unresolved state
+    # here would fall through every `==` comparison below and silently
+    # re-enter the dispatch path for a slot whose real state couldn't be
+    # determined.
+    local state
+    state=$(journal.SlotState $journalDir $slot) \
+      || { echo "HALT: could not determine slot $slot's state" >&2; return 1; }
 
     if [[ $state == recorded ]]; then
       echo "slot $slot ($arm): already recorded, skipping"
