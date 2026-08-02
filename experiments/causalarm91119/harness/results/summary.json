@@ -1,0 +1,97 @@
+{
+  "complete": false,
+  "infra_void_count": 1,
+  "infra_void_slots": [
+    {
+      "slot": 3,
+      "arm": "N",
+      "reason": "driver_killed_mid_dispatch_for_investigation"
+    }
+  ],
+  "n_T": 10,
+  "n_N": 9,
+  "pass_T": 0,
+  "pass_N": 0,
+  "fails_T": [
+    {
+      "slot": 1,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 5,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 6,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 8,
+      "reason": "no_result_file_scorer_healthy"
+    },
+    {
+      "slot": 9,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 12,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 15,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 17,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 18,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 19,
+      "reason": "no_result_file_scorer_healthy"
+    }
+  ],
+  "fails_N": [
+    {
+      "slot": 2,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 4,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 7,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 10,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 11,
+      "reason": "no_matching_module"
+    },
+    {
+      "slot": 13,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 14,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 16,
+      "reason": "scored_not_pass"
+    },
+    {
+      "slot": 20,
+      "reason": "no_result_file_scorer_healthy"
+    }
+  ],
+  "framing": "OPERATIONALLY INCOMPLETE / ABORTED PILOT \u2014 this campaign did NOT reach the preregistered n=10/arm (T: 10/10, N: 9/10, 1 infra-void). Per the frozen no-repair/no-backfill policy, this result is reported on the ACTUAL completed n, never as the preregistered full-n causal result.",
+  "descriptive_fisher_p": null
+}

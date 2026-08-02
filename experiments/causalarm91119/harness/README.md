@@ -72,3 +72,10 @@ full-tree hash is verified before every scoring call.
 - `parse_claude_result.py` — thin adapter, validated directly against a live-captured fixture (`fixtures/claude-result-schema.json`).
 
 No FAIL-stub-as-assertion patterns; `wire-and-score.sh`'s scorer test RECORDS pass/mismatches rather than asserting non-zero — a FAIL is a valid datum, not a test failure (prereg §8).
+
+**Post-execution honesty (added after live runs):** the mock-delegate integration test did NOT catch two real defects that only manifested under live dispatch — (1) `dojo --project X` not changing the wrapped command's cwd (campaign-1, 6 slots, $1.73 wasted), and (2) `rm -rf` on a read-only Go module cache crashing the campaign under `set -e` (campaign-2, halted after slot 4). Both are genuine gaps in the Controller-layer test coverage: the mock path never exercises a real `dojo` invocation or a real populated `GOMODCACHE`, so it structurally could not have caught either. Both are now covered — (1) by the pre-flight mechanism check added at `run-campaign.sh` step 2/7 (zero-cost, no live `claude` call, verifies a file written by a dojo-wrapped command survives to the persisted dir); (2) by `chmod -R u+w` before every `rm -rf $slotGomodcache`. Recorded here rather than only in commit messages because it's a durable lesson about this Controller's test boundary, not a one-off fix.
+
+## Campaign execution history
+
+- **Campaign-1** (2026-08-02): voided after 6/20 slots — see `campaign-1-VOIDED/README.md`.
+- **Campaign-2** (2026-08-02): completed all 20 slots but is operationally incomplete relative to the frozen n=10/arm (1 infra-void in arm N, orchestrator-caused mid-investigation kill, not a systemic recurrence). See `../RESULTS.md` for the full result and honesty framing.
