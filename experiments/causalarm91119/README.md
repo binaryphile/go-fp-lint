@@ -45,7 +45,7 @@ version fixes those (findings F4/F5/F6).
 | 4b embedded/promoted on unrelated type | `a.Case4b` | yes | no flag |
 | 5 pointer/value on fluent | `a.Case5v`/`a.Case5p` | yes | flag both |
 | 5b pointer/value on unrelated | `a.Case5other` | yes | no flag |
-| 7 isolated no-`Map`-on-fluent package | `b` | yes | no diagnostics |
+| 7 isolated TRUE no-op package (no `Map` at all) | `b` | yes | no diagnostics (both refs agree) |
 | **6 method value / method expression** | — | **OUT OF SCOPE** | see below |
 
 **Case 6 — coherent contract boundary (resolves the v1 §3-vs-App-C
@@ -78,9 +78,24 @@ false-positive path — the part-(a) blind spot this arm exists to catch.
 ## Delegate-dispatch warning (#93569 §6) — pre-oracle base, not "exclude dir"
 
 This directory is the oracle's **ground truth** and MUST NOT be visible to the
-dispatched delegates. "Exclude this directory from a post-oracle checkout" is
-**insufficient** — the files persist in git history and any remote. The frozen
-base commit for delegate worktrees must be a **PRE-ORACLE commit** (an ancestor
-of the commit that introduced this directory), with the oracle mounted
-independently at scoring time. Verify with
+dispatched delegates. Two insufficient half-measures (R2 F6): "exclude this
+directory from a post-oracle checkout" (files persist in git history), AND a
+**`git worktree` of the oracle-bearing repo** — a worktree shares the repo's
+`.git` object store, so later objects (incl. this directory) remain reachable
+via `git show <sha>`. The delegate base MUST therefore be a **fresh shallow
+clone at a PRE-ORACLE commit** (`git clone --depth 1 --branch <pre-oracle-ref>`,
+or a filtered clone), whose object store does not contain the oracle at all; the
+oracle is mounted **independently** into the scoring module at scoring time (see
+`Score` in `score.go`). Verify the base predates the oracle with
 `git merge-base --is-ancestor <delegate-base> <oracle-commit>` before dispatch.
+
+## Mechanical scoring adapter (R2 F7/New-3)
+
+`score.go` exports `Score(testdataDir, analyzer) (pass bool, mismatches []string)`
+— the oracle runs an **arbitrary** analyzer against the frozen App-C fixtures and
+returns pass/fail. The #93569 dispatch scores each delegate by importing the
+delegate's package and calling `Score(dir, delegatePkg.Analyzer)`. The frozen
+delegate contract (`DelegateContract`): a scored delegate MUST export
+`var Analyzer *analysis.Analyzer`. This makes delegate scoring mechanical (no
+bespoke per-delegate harness, no human adjudication); the discrimination test
+exercises the same `Score` path on the two references.

@@ -8,5 +8,5 @@ package a
 import fp "github.com/binaryphile/fluentfp/slice"
 
 func Case3b(xs []int) fp.Mapper[int] {
-	return fp.From(xs).Map(inc) // want `fluent Map call: github\.com/binaryphile/fluentfp/slice\.Mapper`
+	return fp.From(xs).Map(inc) // want `^fluent Map call: github\.com/binaryphile/fluentfp/slice\.Mapper$`
 }
