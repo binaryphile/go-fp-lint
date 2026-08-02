@@ -41,7 +41,7 @@ func run(pass *analysis.Pass) (any, error) {
 
 // reachesFluentChainCall reports whether `body` contains at least one
 // CFG-reachable call to KeepIf or Map on a receiver whose static type is
-// defined in the fluentfp module. (C)
+// exactly fluentfp's slice.Mapper. (C)
 func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 	g := cfg.New(body, func(*ast.CallExpr) bool { return true })
 
@@ -53,6 +53,17 @@ func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 			found := false
 			ast.Inspect(node, func(n ast.Node) bool {
 				if found {
+					return false
+				}
+				// Don't descend into function-literal bodies: a live
+				// statement that merely DEFINES a closure (e.g.
+				// `var _ = func() { ... }`) without invoking it does not
+				// make the closure's own body CFG-reachable -- walking in
+				// would wrongly credit an unexecuted mention as
+				// compliant. An immediately-invoked closure's call
+				// expression is still visited normally (it's the
+				// enclosing node, not the FuncLit itself).
+				if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
 					return false
 				}
 				if isFluentChainCall(pass, n) {
@@ -70,7 +81,12 @@ func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 }
 
 // isFluentChainCall reports whether `n` is a call to KeepIf or Map whose
-// receiver's defining package is fluentfp. (C)
+// receiver's static type resolves exactly to fluentfp's slice.Mapper --
+// both the type NAME ("Mapper") and the defining package (fluentfpRoot or a
+// package beneath it, robust to slice.Mapper's real-module aliasing to
+// internal/base). Resolves via Selections first (handles promoted/embedded
+// methods and aliases, matching go-fp-lint's own reference-analyzer
+// pattern), falling back to Uses. (C)
 func isFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 	call, ok := n.(*ast.CallExpr)
 	if !ok {
@@ -83,8 +99,50 @@ func isFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 	if sel.Sel.Name != "KeepIf" && sel.Sel.Name != "Map" {
 		return false
 	}
-	fn, ok := pass.TypesInfo.Uses[sel.Sel].(*types.Func)
-	return ok && fn.Pkg() != nil && isFluentfpPkg(fn.Pkg().Path())
+	fn := resolveMethod(pass, sel)
+	return isFluentSliceMapper(fn)
+}
+
+// resolveMethod resolves a selector to the *types.Func it calls, using
+// Selections first (handles promoted/embedded methods and aliases) then
+// Uses.
+func resolveMethod(pass *analysis.Pass, sel *ast.SelectorExpr) *types.Func {
+	if seln := pass.TypesInfo.Selections[sel]; seln != nil {
+		if fn, ok := seln.Obj().(*types.Func); ok {
+			return fn
+		}
+	}
+	fn, _ := pass.TypesInfo.Uses[sel.Sel].(*types.Func)
+	return fn
+}
+
+// isFluentSliceMapper reports whether fn is a method whose RECEIVER's
+// static type is exactly named "Mapper" and defined in the fluentfp
+// module -- both the type name AND the package check, closing the gap
+// where any fluentfp-rooted type's same-named method would otherwise
+// satisfy the contract.
+func isFluentSliceMapper(fn *types.Func) bool {
+	if fn == nil {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	if !ok || sig.Recv() == nil {
+		return false
+	}
+	named := namedOf(sig.Recv().Type())
+	if named == nil || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return false
+	}
+	return named.Obj().Name() == "Mapper" && isFluentfpPkg(named.Obj().Pkg().Path())
+}
+
+// namedOf strips a leading pointer and returns the *types.Named, or nil.
+func namedOf(t types.Type) *types.Named {
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	named, _ := t.(*types.Named)
+	return named
 }
 
 // isFluentfpPkg reports whether `path` is the fluentfp module or a package

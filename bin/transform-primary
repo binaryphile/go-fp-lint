@@ -88,15 +88,37 @@ main() {
 # computeDisableFlags populates the global DisableFlags array with
 # `-<analyzer>=false` for every shipped analyzer NOT in `onlyCsv`
 # (comma-separated). An empty `onlyCsv` disables nothing -- the default,
-# general-pipeline scope. Called once from main.
+# general-pipeline scope. An unrecognized analyzer name in `onlyCsv` is a
+# caller error -- fail loud rather than silently disabling every shipped
+# analyzer (the bug a typo'd --only would otherwise produce unnoticed).
+# Called once from main.
 computeDisableFlags() {
   local onlyCsv=$1
   DisableFlags=()
   [[ -n $onlyCsv ]] || return 0
 
+  validateOnlyNames $onlyCsv
+
   local a
   for a in "${AllAnalyzers[@]}"; do
     [[ ,$onlyCsv, == *,$a,* ]] || DisableFlags+=( "-$a=false" )
+  done
+}
+
+# validateOnlyNames fatals if `onlyCsv` names an analyzer not in
+# AllAnalyzers.
+validateOnlyNames() {
+  local onlyCsv=$1
+  local name known
+  local -a names_=()
+  IFS=',' read -ra names_ <<<$onlyCsv
+  for name in "${names_[@]}"; do
+    known=false
+    local a
+    for a in "${AllAnalyzers[@]}"; do
+      [[ $name == "$a" ]] && { known=true; break; }
+    done
+    [[ $known == true ]] || fatal "unknown --only analyzer: $name" 64
   done
 }
 

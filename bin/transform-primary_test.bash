@@ -44,6 +44,19 @@ test_computeDisableFlags() {
   tesht.Run ${!case@}
 }
 
+## validateOnlyNames -- Controller quadrant (fatal exits the process; tested
+## as a subshell invocation, not by asserting on internal state).
+
+test_validateOnlyNames_rejectsUnknownAnalyzer() {
+  sourceScript
+
+  local got_
+  got_=$(validateOnlyNames nestedcall,bogus-analyzer 2>&1)
+  local rc=$?
+  tesht.AssertGot $rc 64
+  [[ $got_ == *'unknown --only analyzer: bogus-analyzer'* ]] || tesht.Log "expected 'unknown --only analyzer: bogus-analyzer' in: $got_"
+}
+
 ## passField -- Data/Calculation quadrant
 
 test_passField() {
