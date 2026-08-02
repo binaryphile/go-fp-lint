@@ -70,7 +70,7 @@ frozen §8 machinery requires n=10/arm to be meaningful under the prereg's own
 predeclared analysis plan; at 0/10 vs 0/9 it would show no difference by
 construction, which duplicates the count table without adding information).
 
-## Why zero passes — this is real, mechanically-explicable data, not a harness artifact
+## Why zero passes — real experimental data, not a harness artifact (causes vary in confirmation depth)
 
 Every scoreable slot's failure was individually inspected (not just counted)
 before this report was written, specifically to rule out a residual harness

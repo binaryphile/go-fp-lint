@@ -89,29 +89,31 @@ runCampaign.processSlot() {
   local scoreResult=/tmp/score-slot-$(printf '%02d' $slot)-$$.json
   rm -f $scoreResult
   local resultExists=no resultPass=false mismatches='[]'
-  if bash $Here/wire-and-score.sh $delegatePkgDir $oracleWt $scoreResult $journalDir slot$slot 2>/dev/null; then
-    # Grade IMPL-F8/R2-2 fix: the result file is atomically written
-    # (write-temp + rename in wire-and-score.sh's writeResult) but was
-    # previously consumed via bare `jq -r .pass` with no shape/type check —
-    # "schema-validated" was aspirational, not implemented. Validate the
-    # required fields exist with the expected types before trusting the
-    # file. A file that EXISTS but fails this check is scorer/harness
-    # corruption, not a delegate failure — `resultExists=malformed` routes
-    # to infra-void via runCampaign.classify, distinct from the genuine
-    # "no file at all" FAIL case (resultExists stays "no" only when the
-    # file was never produced).
-    if [[ -f $scoreResult ]]; then
-      if jq -e 'type=="object" and (.pass|type=="boolean") and (.mismatches|type=="array")' \
-        <$scoreResult >/dev/null 2>&1; then
-        resultExists=yes
-      else
-        resultExists=malformed
-      fi
+  bash $Here/wire-and-score.sh $delegatePkgDir $oracleWt $scoreResult $journalDir slot$slot 2>/dev/null ||:
+  # Grade IMPL-F8/R2-2/R3-2 fix: the result file is atomically written
+  # (write-temp + rename in wire-and-score.sh's writeResult) but was
+  # previously consumed via bare `jq -r .pass` with no shape/type check —
+  # "schema-validated" was aspirational, not implemented. Validate the
+  # required fields exist with the expected types before trusting the
+  # file. A file that EXISTS but fails this check is scorer/harness
+  # corruption, not a delegate failure — `resultExists=malformed` routes
+  # to infra-void via runCampaign.classify, distinct from the genuine
+  # "no file at all" FAIL case. Checked UNCONDITIONALLY on wire-and-score.sh's
+  # own exit code (R3-2): the check must not depend on that script's exact
+  # return contract (currently 0 iff the file exists, but coupling this
+  # classification to that implicit invariant is fragile — a file left
+  # behind by a partial/nonzero-exit run must still be caught).
+  if [[ -f $scoreResult ]]; then
+    if jq -e 'type=="object" and (.pass|type=="boolean") and (.mismatches|type=="array")' \
+      <$scoreResult >/dev/null 2>&1; then
+      resultExists=yes
+    else
+      resultExists=malformed
     fi
-    if [[ $resultExists == yes ]]; then
-      resultPass=$(jq -r .pass <$scoreResult)
-      mismatches=$(jq -c .mismatches <$scoreResult)
-    fi
+  fi
+  if [[ $resultExists == yes ]]; then
+    resultPass=$(jq -r .pass <$scoreResult)
+    mismatches=$(jq -c .mismatches <$scoreResult)
   fi
 
   local controlAfter=$(scorerControl.Check $refCorrectDir $oracleWt $Here)
@@ -292,7 +294,14 @@ main() {
       local slotCloneForRecovery=/tmp/slot-$(printf '%02d' $slot)-clone
       local proven=$(journal.KillAndProve $slotCloneForRecovery 30)
       [[ $proven == 1 ]] || { echo "HALT: could not prove slot $slot's process terminated -- NOT recorded, do not resume without manual investigation" >&2; return 1; }
-      journal.Record $journalDir $slot infra-void possibly_launched_prior_crash '{}'
+      # Grade IMPL-R3-1 fix: this is the MOST serious of the three
+      # previously-unchecked journal.Record sites — a failure here was
+      # followed by `continue`, so the loop would proceed to the NEXT slot
+      # while this one stayed genuinely unrecorded (state still
+      # `dispatched`), risking a misleading eventual "CAMPAIGN COMPLETE"
+      # despite an unresolved slot. Now halts instead.
+      journal.Record $journalDir $slot infra-void possibly_launched_prior_crash '{}' \
+        || { echo "HALT: slot $slot proven dead but journal.Record failed -- state inconsistent, do not resume without manual investigation" >&2; return 1; }
       echo "slot $slot: marked infra-void (possibly-launched, never re-run); continuing at $((slot + 1))"
       continue
     fi
@@ -306,7 +315,8 @@ main() {
     runCampaign.cleanupSlot $slot
 
     if ! dispatch.CloneAndIsolate $sourceRepo preoracle-base $slotClone $oracleBlobSha; then
-      journal.Record $journalDir $slot infra-void clone_isolation_failed '{}'
+      journal.Record $journalDir $slot infra-void clone_isolation_failed '{}' \
+        || echo "WARNING: slot $slot journal.Record also failed after clone/isolation failure -- journal state may not reflect this halt" >&2
       echo "HALT: slot $slot clone/isolation failed" >&2
       return 1
     fi
@@ -316,7 +326,8 @@ main() {
     dispatch.Run $slotClone $briefFile $HOME/projects $slotGomodcache $rawResult claude-haiku-4-5-20251001 900
 
     if [[ ! -f $rawResult ]]; then
-      journal.Record $journalDir $slot infra-void dispatch_produced_no_output '{}'
+      journal.Record $journalDir $slot infra-void dispatch_produced_no_output '{}' \
+        || echo "WARNING: slot $slot journal.Record also failed after dispatch produced no output -- journal state may not reflect this halt" >&2
       echo "HALT: slot $slot dispatch produced no raw result" >&2
       return 1
     fi
