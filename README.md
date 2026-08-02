@@ -13,6 +13,12 @@ go build -o go-fp-lint ./cmd/go-fp-lint
 go vet -vettool=$(which go-fp-lint) ./...   # or as a go vet plugin
 ```
 
+`bin/transform-primary [--only ANALYZER1,ANALYZER2,...] PACKAGE_DIR` runs the full
+WRITE -> TRANSFORM -> LINT pipeline (pre-fix diagnostics, an in-place `-fix` pass, a post-fix
+compile re-check, post-fix residual diagnostics) and emits one JSON summary — see
+`docs/design.md` §"bin/transform-primary" for the schema and the pipeline's first scoped caller
+(`experiments/coachingmin87588/`, jeeves #87588).
+
 ## Development
 
 ```bash

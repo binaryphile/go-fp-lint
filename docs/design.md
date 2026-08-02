@@ -1708,3 +1708,47 @@ form, so the earlier deferral #90252 was retired (superseded-by #66830).
 - `go build ./... && go test ./... && go vet ./...` — all clean (real toolchain, clean env; the per-project `bin/go` nix-wrapper E2BIGs — era memory `67f60f60f040`).
 - go-fp-lint self-lint (dogfood, `-impuresource=false -impurereach=false ./...`) — clean; `mapfusion` runs on go-fp-lint's own source with no findings.
 - Registered: `multichecker.Main(...)` now includes `mapfusion.Analyzer`; the built binary's `help` lists it (12th analyzer).
+
+## `bin/transform-primary` — the general write-transform-lint pipeline (jeeves #87588)
+
+Every analyzer above is invoked as a standalone `go-fp-lint`/`go vet -vettool` call — useful for
+CI or an author-time check, but not a single WRITE -> TRANSFORM -> LINT pipeline that a caller can
+point at a package and get one summary of "did fixing this code work." `bin/transform-primary`
+(bash, new this cycle) fills that gap:
+
+```
+transform-primary [--only ANALYZER1,ANALYZER2,...] PACKAGE_DIR
+```
+
+Default (no `--only`): every shipped analyzer applies its `-fix` — the general production
+pipeline. `--only` narrows both the PRE/POST diagnostic passes and the FIX pass to a specific
+subset, used by jeeves #87588's `experiments/coachingmin87588/` causal-arm scoring
+(`--only nestedcall`) as a documented, deliberate narrowing via a flag, not a built-in identity
+change.
+
+Steps: build the current `go-fp-lint` binary; a PRE diagnostic pass (no `-fix`); a FIX pass; a
+post-fix compile re-check (a fix that breaks compilation is a pipeline bug, reported as
+`post_fix_compiled: false`, distinct from a delegate-authoring problem); a POST diagnostic pass
+against the now-fixed source. Emits one JSON summary on stdout:
+`{"compiled": bool, "post_fix_compiled": bool|null, "pre_count": int|null, "post_count":
+int|null, "residual": bool|null}` (null fields mean short-circuited upstream, e.g. the PRE pass
+never type-checked).
+
+Diagnostic-vs-build-failure classification (empirical, confirmed this cycle): go-fp-lint's
+`multichecker.Main` driver emits diagnostics on stderr, not stdout, in
+`<file>:<line>:<col>: <message>` form, and a real compile/load failure's own message matches
+that same positional shape. The reliable signal is the driver's distinctive
+"analysis skipped due to errors in package" marker; a line lacking it is a diagnostic, a line
+carrying it means the package never type-checked. `runPass` in `bin/transform-primary`
+implements exactly this rule.
+
+`experiments/coachingmin87588/` (jeeves #87588's preregistered coaching-minimum causal arm, see
+jeeves `investigations/2026-08-02-transform-primary-coaching-minimum-preregistration.md`) is the
+pipeline's first scoped caller: a structural contract checker (`contractcheck/`, CFG-reachability
+plus exact fluentfp-type AST analysis), a frozen functional eligibility oracle (`oracle.go`), and
+`score.sh` (the vehicle-aware merger combining both with `transform-primary --only nestedcall`
+into one final scoring record). `transform-primary` itself stays fully vehicle-agnostic, carrying
+no knowledge of `coachingmin87588` or any other caller's contract; `score.sh` is where that
+vehicle-specific knowledge lives, matching this repo's existing separation between generic
+analyzers and any vehicle-specific test harness built on top of them
+(`experiments/causalarm91119/` is the precedent for this split).
