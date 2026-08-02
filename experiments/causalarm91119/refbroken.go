@@ -2,17 +2,22 @@ package causalarm91119
 
 import (
 	"go/ast"
+	"go/types"
 
 	"golang.org/x/tools/go/analysis"
 )
 
 // BrokenAnalyzer is the reference name-only implementation — the FORBIDDEN
-// technique (App B forbids it): it flags any `.Map(...)` call by matching the
-// selector name string, with no type resolution. It therefore false-positives
-// on the negative-control cases (Other.Map, case 2 and 5b). The discrimination
-// test requires this to FAIL the fixtures; if it passed, the oracle would be
-// too shallow to tell a correct analyzer from a broken one (the exact part-(a)
-// failure mode this arm exists to avoid).
+// technique (App B forbids it). Its FLAGGING DECISION is purely the selector
+// name string ("Map"), with NO receiver-type check. To keep the discrimination
+// signal cleanly attributable, it emits the SAME message as CorrectAnalyzer on
+// the calls both would flag (computing the receiver type only for the message,
+// not the decision) — so on the true-positive fixtures it matches the `// want`
+// markers exactly, and its ONLY divergence is the FALSE POSITIVES it raises on
+// the negative-control cases (Other.Map, cases 2 and 5b). The discrimination
+// test therefore fails the broken reference specifically on "unexpected
+// diagnostic" over-flagging — the exact part-(a) blind spot this arm exists to
+// catch — rather than on some unrelated mismatch.
 var BrokenAnalyzer = &analysis.Analyzer{
 	Name: "fluentmapbroken",
 	Doc:  "reference-broken name-only fluentmap analyzer (jeeves #91119 causal-arm oracle discrimination)",
@@ -20,21 +25,10 @@ var BrokenAnalyzer = &analysis.Analyzer{
 }
 
 func runBroken(pass *analysis.Pass) (interface{}, error) {
-	for _, file := range pass.Files {
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			if sel.Sel.Name == "Map" { // name-only string match — no go/types
-				pass.ReportRangef(call, mapMessage)
-			}
-			return true
-		})
-	}
+	forEachMapCall(pass, func(call *ast.CallExpr, sel *ast.SelectorExpr, fn *types.Func) {
+		// name-only decision: sel.Sel.Name == "Map" already guaranteed by
+		// forEachMapCall, so flag unconditionally — no receiver-type check.
+		pass.ReportRangef(call, "fluent Map call: %s", recvTypeString(fn))
+	})
 	return nil, nil
 }
