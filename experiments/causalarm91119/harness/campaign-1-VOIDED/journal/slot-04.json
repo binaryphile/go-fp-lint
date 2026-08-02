@@ -1,0 +1,11 @@
+{
+  "slot": 4,
+  "arm": "N",
+  "state": "recorded",
+  "driver_pid": 22841,
+  "dispatched_at": "2026-08-02T15:47:45Z",
+  "status": "fail",
+  "reason": "no_matching_module",
+  "metrics": {},
+  "recorded_at": "2026-08-02T15:49:57Z"
+}

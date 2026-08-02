@@ -1,0 +1,11 @@
+{
+  "slot": 6,
+  "arm": "T",
+  "state": "recorded",
+  "driver_pid": 22841,
+  "dispatched_at": "2026-08-02T15:54:59Z",
+  "status": "infra-void",
+  "reason": "driver_process_killed_mid_dispatch_bug_discovered",
+  "metrics": {},
+  "recorded_at": "2026-08-02T16:52:53Z"
+}

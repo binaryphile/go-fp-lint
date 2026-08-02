@@ -57,8 +57,20 @@ dispatch.Run() {
   local brief_=$(cat $briefPath)
   mkdir -p $gomodcacheDir
 
+  # `dojo --project X` mounts X read-write but does NOT change the wrapped
+  # command's cwd (confirmed empirically — a bare `dojo --project X -- pwd`
+  # echoes the CALLER's cwd, not X). An explicit `cd` is REQUIRED, or the
+  # delegate has no reliable notion of "the project directory" and may write
+  # its deliverable somewhere else entirely inside the sandbox's ephemeral
+  # overlay — invisible to discovery and lost when the sandbox exits (the
+  # root cause of the campaign-1 defect: 5/5 slots produced a real,
+  # substantial analyzer that landed in the sandbox's home directory instead
+  # of the persisted clone).
   dojo --project $slotDir --persist $slotDir --persist $gomodcacheDir --hide $hideDir -- \
-    env GOMODCACHE=$gomodcacheDir timeout $timeoutS \
-    claude -p "$brief_" --model $model --output-format json --permission-mode bypassPermissions \
+    bash -c '
+      cd "$1" &&
+      GOMODCACHE="$2" timeout "$5" \
+        claude -p "$3" --model "$4" --output-format json --permission-mode bypassPermissions
+    ' _ $slotDir $gomodcacheDir "$brief_" $model $timeoutS \
     >$rawResultPath 2>$rawResultPath.stderr
 }

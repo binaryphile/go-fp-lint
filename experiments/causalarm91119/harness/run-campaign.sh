@@ -104,18 +104,34 @@ runCampaign.processSlot() {
 
 # runCampaign.preflight runs every HALT-on-fail check the frozen protocol
 # requires before slot 1 (prereg §5/§6; plan "Frozen execution semantics"):
-# offline env, pinned-oracle clean-tree + full-tree hash, stats validation,
-# integrity replay through the real scoring path, and a mock-delegate
-# dry-run sharing processSlot's own code. Consumes ZERO vector slots.
-# Returns 0 on total success, 1 on any failure (with a diagnostic).
+# offline env, dojo cwd-persistence mechanism, pinned-oracle clean-tree +
+# full-tree hash, stats validation, integrity replay through the real
+# scoring path, and a mock-delegate dry-run sharing processSlot's own code.
+# Consumes ZERO vector slots and ZERO live claude dispatches. Returns 0 on
+# total success, 1 on any failure (with a diagnostic).
 runCampaign.preflight() {
   local oracleWt=$1 refCorrectDir=$2 refBrokenDir=$3
 
-  echo 'PRE-FLIGHT 1/6: offline scoring env'
+  echo 'PRE-FLIGHT 1/7: offline scoring env'
   command -v go >/dev/null || { echo 'FAIL: go not on PATH'; return 1; }
   [[ $(go env GOPROXY) == off ]] || echo 'note: GOPROXY not off in ambient env (wire-and-score.sh sets it per-call)'
 
-  echo 'PRE-FLIGHT 2/6: pinned-oracle clean + full-tree hash'
+  echo 'PRE-FLIGHT 2/7: dojo cwd-persistence mechanism (zero-cost, no claude call)'
+  # Anchor: campaign-1 (2026-08-02) discovered empirically that `dojo
+  # --project X` does NOT change the wrapped command's cwd -- 5/5 delegates
+  # produced real, substantial work that landed outside the persisted
+  # directory and was silently discarded on sandbox exit, misclassified as
+  # delivery FAIL rather than the infra defect it was. This check would have
+  # caught it before any real spend.
+  local mechDir=$(mktemp -d /tmp/preflight-mech-XXXXXX)
+  dojo --project $mechDir --persist $mechDir --hide $HOME/projects -- \
+    bash -c 'cd "$1" && echo probe >probe.txt' _ $mechDir >/dev/null 2>&1
+  [[ -f $mechDir/probe.txt ]] && [[ $(cat $mechDir/probe.txt) == probe ]] \
+    || { echo "FAIL: a file written by the sandboxed command did not survive to the persisted dir — dojo cwd/persist mechanism broken"; rm -rf $mechDir; return 1; }
+  rm -rf $mechDir
+  echo 'dojo cwd-persistence mechanism OK'
+
+  echo 'PRE-FLIGHT 3/7: pinned-oracle clean + full-tree hash'
   local dirty=$(git -C $oracleWt status --porcelain)
   [[ -z $dirty ]] || { echo "FAIL: oracle worktree dirty: $dirty"; return 1; }
   local actualHash=$( (cd $oracleWt && find experiments/causalarm91119 -type f | sort | xargs sha256sum | sha256sum | cut -d' ' -f1) )
@@ -125,10 +141,10 @@ runCampaign.preflight() {
   local frozenOracle=$(jq -r .oracle.commit <$Here/FROZEN.json)
   [[ $oracleHead == $frozenOracle ]] || { echo "FAIL: oracle HEAD mismatch: got $oracleHead want $frozenOracle"; return 1; }
 
-  echo 'PRE-FLIGHT 3/6: stats validated vs independent reference'
+  echo 'PRE-FLIGHT 4/7: stats validated vs independent reference'
   python3 $Here/stats_test.py || { echo 'FAIL: stats_test.py'; return 1; }
 
-  echo 'PRE-FLIGHT 4/6: integrity replay (real scoring path)'
+  echo 'PRE-FLIGHT 5/7: integrity replay (real scoring path)'
   local rc1=/tmp/preflight-correct-$$.json rc2=/tmp/preflight-broken-$$.json
   rm -f $rc1 $rc2
   bash $Here/wire-and-score.sh $refCorrectDir $oracleWt $rc1 preflight correct ||:
@@ -139,7 +155,7 @@ runCampaign.preflight() {
   rm -f $rc1 $rc2
   echo 'integrity replay OK: correct=PASS broken=FAIL(with mismatches)'
 
-  echo 'PRE-FLIGHT 5/6: brief SHA assertion'
+  echo 'PRE-FLIGHT 6/7: brief SHA assertion'
   local nSha=$(sha256sum $Here/briefs/arm-N.txt | cut -d' ' -f1)
   local tSha=$(sha256sum $Here/briefs/arm-T.txt | cut -d' ' -f1)
   local frozenN=$(jq -r .briefs.arm_N_sha256 <$Here/FROZEN.json)
@@ -147,7 +163,7 @@ runCampaign.preflight() {
   [[ $nSha == $frozenN ]] || { echo "FAIL: arm-N brief SHA drift"; return 1; }
   [[ $tSha == $frozenT ]] || { echo "FAIL: arm-T brief SHA drift"; return 1; }
 
-  echo 'PRE-FLIGHT 6/6: mock-delegate dry-run (shares live processSlot code)'
+  echo 'PRE-FLIGHT 7/7: mock-delegate dry-run (shares live processSlot code)'
   local mockJournal=/tmp/preflight-mock-journal-$$
   rm -rf $mockJournal
   journal.Init $mockJournal preflight-mock-vector >/dev/null

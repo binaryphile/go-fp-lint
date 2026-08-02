@@ -1,6 +1,7 @@
 {
   "purpose": "Freeze-before-dispatch manifest (prereg #93569; grade R2-10). Every pin here is fixed BEFORE slot 1 of the 20-slot frozen App-D campaign. The intervention apparatus itself must be frozen, not just the assignment vector.",
   "frozen_at": "2026-08-02",
+  "campaign_2_note": "Campaign-1 (frozen_at above) was VOIDED after 6/20 slots (journal archived, not used as data): dispatch.bash lacked an explicit `cd` into the sandbox-persisted slot dir, so dojo's --project flag (which does NOT change cwd, confirmed empirically) left delegates writing real work outside the persisted/discoverable path -- 5 slots misclassified as delivery FAIL when the true cause was a harness defect. Fixed (dispatch.bash's dojo invocation now `cd`s explicitly) and verified via a new zero-cost pre-flight mechanism check (no live claude call) before this re-freeze. See jeeves tasks.jeeves event #95146 (/loopback) for full root-cause + void-decision record.",
   "vector": {
     "arms": ["T","N","N","N","T","T","N","T","T","N","N","T","N","N","T","N","T","T","T","N"],
     "n_per_arm": 10,
