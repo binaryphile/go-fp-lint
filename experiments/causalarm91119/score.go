@@ -12,7 +12,7 @@ import (
 // fluentmap vehicle. The #93569 dispatch scores each delegate mechanically by
 // importing that package and calling Score() with its Analyzer — no per-delegate
 // bespoke harnessing, no human adjudication.
-const DelegateContract = "delegate package MUST export: var Analyzer *analysis.Analyzer"
+const DelegateContract = "delegate MUST deliver package fluentmap at module path example.com/delegate/fluentmap exporting: var Analyzer *analysis.Analyzer (scored via go.mod replace + Score(); prereg §3/§8)"
 
 // scoreRecorder captures analysistest failures so an analyzer can be scored
 // WITHOUT failing a test process (analysistest.Testing is just Errorf).
