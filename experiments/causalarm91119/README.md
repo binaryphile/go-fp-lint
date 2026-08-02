@@ -95,7 +95,11 @@ oracle is mounted **independently** into the scoring module at scoring time (see
 — the oracle runs an **arbitrary** analyzer against the frozen App-C fixtures and
 returns pass/fail. The #93569 dispatch scores each delegate by importing the
 delegate's package and calling `Score(dir, delegatePkg.Analyzer)`. The frozen
-delegate contract (`DelegateContract`): a scored delegate MUST export
-`var Analyzer *analysis.Analyzer`. This makes delegate scoring mechanical (no
-bespoke per-delegate harness, no human adjudication); the discrimination test
-exercises the same `Score` path on the two references.
+delegate contract (`DelegateContract`): a scored delegate MUST deliver package
+`fluentmap` at module path `example.com/delegate/fluentmap` exporting
+`var Analyzer *analysis.Analyzer`. Scoring is edit-free per delegate: the
+dispatch `go.mod replace`s that path to the delegate's clone and the oracle in
+independently, then a generated `score_test.go` calls
+`Score(oracleTestdataDir, fluentmap.Analyzer)` (prereg §3/§8). No bespoke
+per-delegate harness, no human adjudication; the discrimination test exercises
+the same `Score` path on the two references.
