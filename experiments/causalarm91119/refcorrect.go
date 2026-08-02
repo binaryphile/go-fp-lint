@@ -16,11 +16,14 @@
 // call expressions); this is a coherent contract boundary, not a gap.
 //
 // NOTE FOR DELEGATE DISPATCH (#93569 §6): this directory is the oracle's ground
-// truth and MUST NOT be visible to the dispatched delegates. The frozen base
-// commit for delegate worktrees must be a PRE-ORACLE commit (an ancestor of the
-// commit that introduced this directory), and the oracle mounted independently
-// at scoring time — "exclude the directory" from a post-oracle checkout is not
-// sufficient because the file persists in git history.
+// truth and MUST NOT be visible to the dispatched delegates. Delegates work in a
+// fresh SHALLOW CLONE at a PRE-ORACLE commit (NOT a git worktree — a worktree
+// shares the .git object store, leaving this directory reachable via git show),
+// and the oracle is mounted independently at scoring time. Verify the base
+// predates the oracle by the oracle file being ABSENT there
+// (`! git cat-file -e <base>:experiments/causalarm91119/refcorrect.go`) — a
+// stronger check than `merge-base --is-ancestor`, which is also true for the
+// oracle commit itself.
 package causalarm91119
 
 import (
