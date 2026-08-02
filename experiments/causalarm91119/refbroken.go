@@ -14,7 +14,8 @@ import (
 // the calls both would flag (computing the receiver type only for the message,
 // not the decision) — so on the true-positive fixtures it matches the `// want`
 // markers exactly, and its ONLY divergence is the FALSE POSITIVES it raises on
-// the negative-control cases (Other.Map, cases 2 and 5b). The discrimination
+// the negative-control cases (Other.Map cases 2/5b, embedded-unrelated 4b, and the
+// different-fluentfp-type option.Option.Map case 8). The discrimination
 // test therefore fails the broken reference specifically on "unexpected
 // diagnostic" over-flagging — the exact part-(a) blind spot this arm exists to
 // catch — rather than on some unrelated mismatch.

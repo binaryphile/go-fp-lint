@@ -25,7 +25,9 @@ version fixes those (findings F4/F5/F6).
   technique App B forbids). Decides purely on the selector name `Map`; emits the
   same message on shared flags, so its ONLY divergence is false positives on the
   negative controls.
-- `testdata/src/a/a.go` + `a2.go` — the fixture set; each case maps to an
+- `testdata/src/a/a.go` + `a2.go` (renamed import) + `a3.go` (different fluentfp type
+  `option.Option`, case 8) + the `option` stub under `testdata/src/.../fluentfp/option` —
+  the fixture set; each case maps to an
   Appendix-C row. The want-markers are the exact expected diagnostics (message
   incl. receiver type), derived from the rule before any run (positive control).
 - `testdata/src/b/b.go` — the isolated no-op package (Case 7).
@@ -67,7 +69,8 @@ headless, memory `d5f2ea188b30`):
   marker exactly, across the positive/negative package `a` AND the clean package
   `b` (positive control passes; zero analysistest errors).
 - `TestOracle_BrokenFails` — the name-only reference emits the same messages on
-  the true positives but false-positives on the negative controls (2/4b/5b);
+  the true positives but false-positives on the negative controls (2/4b/5b, and case 8 —
+  the different-fluentfp-type option.Option.Map);
   the test requires at least one **"unexpected diagnostic"** error, so the
   failure is attributable specifically to the name-vs-type over-flag — not an
   unrelated mismatch (finding F6).
@@ -85,7 +88,8 @@ directory from a post-oracle checkout" (files persist in git history), AND a
 `.git` object store, so later objects (incl. this directory) remain reachable
 via `git show <sha>`. The delegate base MUST therefore be a **fresh shallow
 clone at a PRE-ORACLE commit** (`git clone --depth 1 --branch <pre-oracle-ref>`,
-or a filtered clone), whose object store does not contain the oracle at all; the
+NOT a `--filter` clone — a partial clone can lazily fetch later objects on demand,
+defeating the isolation), whose object store does not contain the oracle at all; the
 oracle is mounted **independently** into the scoring module at scoring time (see
 `Score` in `score.go`). Verify the base predates the oracle by the oracle file being
 **ABSENT** there — `! git cat-file -e <delegate-base>:experiments/causalarm91119/refcorrect.go`
