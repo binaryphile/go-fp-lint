@@ -1,0 +1,19 @@
+**Task: write a Go static-analysis analyzer named `fluentmap`.**
+
+Write a `go/analysis`-style analyzer, `fluentmap`, that detects calls to the `Map` method on
+the project's fluent slice type. When code calls the fluent slice's `Map` method with a
+transform function, your analyzer should report a diagnostic at the call site with the message
+`fluent Map call: <receiver-type>`. Calls to `Map` methods that are not the project's fluent
+slice type should not be reported.
+
+**Delivery (required):** deliver your analyzer as Go package **`fluentmap`** at module path
+**`example.com/delegate/fluentmap`** (a module with its own `go.mod`), exporting a
+package-level **`var Analyzer *analysis.Analyzer`**. It will be scored by importing that symbol.
+
+Provide the analyzer as a standard `*analysis.Analyzer` value with a `Run` function, plus a
+small set of your own tests demonstrating it works. Follow ordinary Go conventions: keep the
+`Run` function readable, name variables clearly, return errors rather than panicking, and make
+sure the package builds. Write table-driven tests where that reads naturally, keep test helper
+functions small, and prefer standard-library facilities over extra dependencies. Document the
+analyzer with a short doc comment describing what it reports. The goal is a correct,
+maintainable analyzer that a reviewer could read top-to-bottom and understand quickly.

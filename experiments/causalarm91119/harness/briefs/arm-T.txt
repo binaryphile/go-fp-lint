@@ -1,0 +1,22 @@
+**Task: write a Go static-analysis analyzer named `fluentmap`.**
+
+Write a `go/analysis`-style analyzer, `fluentmap`, that detects calls to the `Map` method on
+the project's fluent slice type. When code calls the fluent slice's `Map` method with a
+transform function, your analyzer should report a diagnostic at the call site with the message
+`fluent Map call: <receiver-type>`. Calls to `Map` methods that are not the project's fluent
+slice type should not be reported.
+
+**Delivery (required):** deliver your analyzer as Go package **`fluentmap`** at module path
+**`example.com/delegate/fluentmap`** (a module with its own `go.mod`), exporting a
+package-level **`var Analyzer *analysis.Analyzer`**. It will be scored by importing that symbol.
+
+**Technique (required):** resolve the receiver's TYPE — do not match on the method name
+string. Use `pass.TypesInfo` (e.g. `pass.TypesInfo.Types[recvExpr].Type`, or
+`pass.TypesInfo.Selections[sel]`) to obtain the receiver's static type, and confirm its type
+name AND package path match the project's fluent slice type. A name-only check (matching the
+selector `.Map(`) is FORBIDDEN — it produces false positives on any unrelated type that
+happens to define a `Map` method. Handle type aliases and renamed imports (compare the
+resolved `types.Object`'s package path, not the source identifier), embedded/promoted methods
+(resolve to the true receiver type), and both pointer and value receivers. You MUST include
+adversarial test fixtures: at minimum a same-named `Map` on an unrelated type (must NOT fire),
+an aliased fluent type (must fire), an embedded-method case, and pointer-vs-value receivers.
