@@ -118,6 +118,7 @@ validateOnlyNames() {
     for a in "${AllAnalyzers[@]}"; do
       [[ $name == "$a" ]] && { known=true; break; }
     done
+    # shellcheck disable=SC9003 # $name is embedded in an already-double-quoted string literal (fatal's message arg) -- there is no bare expansion here to unquote
     [[ $known == true ]] || fatal "unknown --only analyzer: $name" 64
   done
 }

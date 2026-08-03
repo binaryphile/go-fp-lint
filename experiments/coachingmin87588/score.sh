@@ -105,6 +105,7 @@ buildContractcheckVet() {
 # for this scoring call regardless of the candidate's own require version.
 addFluentfpReplace() {
   local modFile=$1
+  # shellcheck disable=SC9003 # $StubDir is embedded in an already-double-quoted echo argument -- there is no bare expansion here to unquote
   echo "replace github.com/binaryphile/fluentfp => $StubDir" >> $modFile
 }
 
