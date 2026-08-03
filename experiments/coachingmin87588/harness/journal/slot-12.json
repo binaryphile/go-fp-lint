@@ -1,0 +1,28 @@
+{
+  "slot": 12,
+  "arm": "U",
+  "state": "recorded",
+  "driver_pid": 8868,
+  "dispatched_at": "2026-08-03T06:32:57Z",
+  "status": "fail",
+  "reason": "scored_not_pass",
+  "metrics": {
+    "subtype": "success",
+    "is_error": false,
+    "duration_ms": 37650,
+    "num_turns": 5,
+    "total_cost_usd": 0.16176139999999997,
+    "input_tokens": 42,
+    "output_tokens": 3253,
+    "cache_read_input_tokens": 308244,
+    "cache_creation_input_tokens": 57315,
+    "score_pass": false,
+    "mismatches": [
+      "contract_compliant"
+    ],
+    "control_before": "healthy",
+    "control_after": "healthy",
+    "infra_void": false
+  },
+  "recorded_at": "2026-08-03T06:33:46Z"
+}

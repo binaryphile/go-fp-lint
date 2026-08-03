@@ -39,6 +39,12 @@ effect at n=10 (NOT evidence of no effect).** The pass rate is identical between
 each); the coaching block produced no directionally distinguishable effect on the ITT-clean
 endpoint at this sample size.
 
+**Explicit CI-width caveat (IMPL-grade finding):** the difference CI half-width (~0.315) is
+wide enough to be compatible with a practically meaningful true effect in either direction —
+"underpowered" is not a claim that no such effect exists, only that n=10/arm cannot distinguish
+it from zero here. A true difference of, say, 20-30 percentage points between arms would still
+be statistically indistinguishable from the observed identical 1/10 result at this sample size.
+
 **Failure mode, both arms:** all 18 failing slots failed at the SAME gate —
 `mismatches: ["contract_compliant"]` — i.e., the delegate's code never satisfied the
 frozen structural contract (using `fluentfp`'s `KeepIf`/`Map` chain methods rather than a
@@ -63,32 +69,77 @@ retained past each slot's own processing — this is a genuine gap in this cycle
 mechanism entirely), discovered only after the campaign had already run to completion, when
 retention would have needed to happen live, per-slot.
 
-**Practical impact is bounded, not zero, but modest**: since every one of the 18 failures
-failed at the `contract_compliant` gate (§ above) — before `score.sh`'s pipeline reaches the
-`pre_count`/`post_count`/`residual` computation stage in any of them — the secondary breakdown's
-informational content for THIS run would likely have been thin regardless (18 slots with the
-same qualitative "never reached the transform stage" story; only the 2 passing slots would have
-had a meaningful pre/post pair to report). This is offered as context for the gap's real cost,
-not as a retroactive excuse for not having caught it before dispatch.
+**This is a protocol deviation, not a minor omission (IMPL-grade correction).** The
+preregistration's §6 secondary breakdown is REQUIRED reporting, not optional context — its
+unavailability is recorded here as **UNAVAILABLE / lost**, full stop. An earlier draft of this
+section speculated that the missing data's informational value "would likely have been thin"
+because all 18 failures were `contract_compliant` misses. That speculation is withdrawn on
+review: binary contract-pass/fail does not establish what the PRE/POST diagnostic counts would
+have shown about severity or mechanism even among the failing slots (the contract check and the
+`transform-primary` diagnostic counts are independent measurements on the same candidate code —
+a contract-noncompliant candidate can still be run through `--only nestedcall` and produce a
+real pre/post count; `score.sh`'s own short-circuit design chose not to compute those fields once
+`contract_compliant` was false, which is a pipeline design decision, not evidence the numbers
+would have been uninformative). The honest position is: the secondary result is unavailable, its
+value is unknown, and no impact assessment is offered in its place.
 
-**Follow-up filed** to fix the retention gap for any future campaign reusing this harness (see
-Deferred, below) — not re-run this campaign, since re-dispatching to recover secondary data would
-violate the frozen no-repair/no-redispatch policy (§8 of the preregistration) and isn't necessary
-to answer the primary causal question, which is now fully and validly answered above.
+**Root-cause classification**: this is also a preflight-adequacy defect, not merely a
+retention-format oversight. The pre-flight checks (PRE-FLIGHT 1/7-7/7, all passed before real
+dispatch) verified the scorer's raw OUTPUT correctness but never verified that the REQUIRED
+analysis fields survive the full dispatch → journal → analysis persistence path end-to-end
+before real money was spent. That path-completeness check should have been part of pre-flight
+and was not — recorded here as the clearest implementation defect in this cycle, not softened.
+
+**Follow-up filed** (`go-fp-lint#98182`) to fix the retention gap AND add a pre-flight check that
+verifies the full persistence path (not just scorer-output correctness) before any future
+campaign's real dispatch. Not re-running this campaign to recover secondary data, since
+re-dispatching would violate the frozen no-repair/no-redispatch policy (§8 of the
+preregistration) and the primary causal question is already fully and validly answered above —
+but the secondary result itself stays recorded as lost, not estimated.
 
 ## UserSov §3c.5 — two-stage review
 
-**Stage 1** (pre-dispatch, delta review across the 8 named surfaces): completed and published
-(`tasks.jeeves` interaction events, this session, prior to slot 1 dispatch — retroactively
-relative to slot 1 specifically, since a prior session's own harness-build work had already
-dispatched it before this session's claim; disclosed honestly as a process gap in the prior
-session, not hidden). Findings: property 9 (delegation integrity) — dojo's scoped mount +
-`--hide` isolation verified directly against `dispatch.bash`'s actual code, disposition
-`fixed-verified`. No other property yielded a live finding; all reasoned N/A or clear.
+**Protocol deviation, recorded explicitly (IMPL-grade finding, not self-cleared).** The plan
+requires the Stage-1 11-property record to exist BEFORE slot 1 dispatches. It did not: a prior
+session's harness-build work dispatched slot 1 (real $0.14 spent) before any Stage-1 record was
+ever published. This session discovered the gap on pickup, after slot 1 had already run, and
+authored Stage 1 retroactively as the best available mitigation — but authoring a "prior"
+baseline after the fact does not recreate a genuine independent-prior review, and the campaign
+is **not fully process-conformant** on this point. This is disclosed as a real deviation, not
+papered over as equivalent to a compliant run. `evtctl interaction "/variance"` filed on
+`tasks.jeeves` recording the deviation explicitly (see completion-gate evidence).
 
-**Stage 2** (post-slot-1, before continuing to slots 2-20): reviewed slot 1's actual real record
-against Stage 1's assumptions — held. No new sovereignty surface or violation surfaced by any
-real record across the full 20-slot run. Clearance: proceed (published, campaign continued).
+**Stage 1** (delta review across the 8 named surfaces, authored retroactively per above):
+property 9 (delegation integrity) — dojo's scoped mount + `--hide` isolation verified directly
+against `dispatch.bash`'s actual code, disposition `fixed-verified`. No other property yielded a
+live finding; all reasoned N/A or clear.
+
+**Stage 2** (post-slot-1, before continuing to slots 2-20 — this part of the design WAS followed
+correctly, since slot 1 genuinely paused for review before slot 2 ran): reviewed slot 1's actual
+real record against the (retroactive) Stage-1 baseline — held. No new sovereignty surface or
+violation surfaced by any real record across the full 20-slot run. Clearance: proceed (published,
+campaign continued).
+
+**Durable evidence**: the full per-slot journal (`journal/slot-01.json` through `slot-20.json`,
+`journal/campaign.json`) is committed alongside this file — not left as local-only, untracked
+state — so slot outcomes, real costs, and the absence of any halt-condition trigger beyond the
+planned Stage-2 pause are independently auditable from the repository itself, not only from this
+narrative (IMPL-grade finding: a real-spend, high-risk campaign's evidence should not rely solely
+on prose recounting).
+
+## Phase 3c Khorikov posture — bash conformance note
+
+The one genuinely new file (`wire-and-score.sh`) is zero-SC9xxx-clean. The three forked files
+(`dispatch.bash`, `journal.bash`, `scorer-control.bash`) carry pre-existing SC9xxx findings
+inherited unchanged from `#91119`'s already-shipped source (verified by direct diff:
+`dispatch.bash` differs by one hardcoded path string, `journal.bash` by a doc-comment only,
+`scorer-control.bash` is byte-identical). **IMPL-grade caveat, recorded rather than
+self-adjudicated**: no explicit, recorded estate-wide policy currently establishes that a forked
+file's pre-existing debt is exempt from this cycle's own conformance responsibility merely
+because the diff is small — this cycle's judgment that "unchanged inherited code is out of
+scope" is a reasonable per-cycle call, not a citation of an established convention. Recorded
+here as an open question for tandem-protocol's own bash-conformance discipline to resolve
+generally, rather than asserted as settled by this cycle alone.
 
 ## Scope-fold: `#96719` hardening items
 
