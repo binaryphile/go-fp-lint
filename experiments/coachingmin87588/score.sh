@@ -115,6 +115,20 @@ addFluentfpReplace() {
 # -- confirmed here for go vet's unitchecker output (Phase 3a, this cycle):
 # the contract diagnostic and a build failure are distinguished by the
 # specific contract message text, not by exit code or stream alone.
+#
+# compiled=false on ANY other nonempty stderr necessarily entails
+# contract_compliant=false (IMPL-grade R2 finding 4): the frozen record
+# schema (plan's "Functional-oracle binding + scorer merge" section) types
+# BOTH fields as plain bool, with no third "unassessable" state -- a
+# package that fails to type-check never reaches the analyzer at all (a
+# go/analysis load precondition), so the contract diagnostic and an
+# unrelated build failure are mutually exclusive by construction, and
+# compiled=false is the only schema-legal value for contract_compliant in
+# that branch. This mirrors post_fix_compiled:false nulling every
+# downstream field elsewhere in this same script -- an established pattern,
+# not a new one. Widening the schema to a genuine tri-state would be a
+# frozen-contract change requiring its own plan loopback, not an
+# implementation-authority fix.
 runStructuralCheck() {
   local dir=$1
   local stderr_

@@ -3,9 +3,10 @@
 // code. This is jeeves #87588's structural contract check: a candidate that
 // routes around the fluentfp chain library, or only mentions it in a
 // comment or unreachable branch, is a contract violation distinct from a
-// functional failure. Reuses go-fp-lint's own package-prefix + type-name
-// receiver-resolution pattern (mapfusion.isFluentfpPkg) rather than a bare
-// grep, and CFG.Live to exclude dead code (golang.org/x/tools/go/cfg).
+// functional failure. Reuses go-fp-lint's own type-name + exact-package
+// receiver-resolution pattern (mirrors mapfusion/#91119's reference
+// analyzers) rather than a bare grep, and CFG.Live to exclude dead code
+// (golang.org/x/tools/go/cfg).
 package contractcheck
 
 import (
@@ -16,7 +17,19 @@ import (
 	"golang.org/x/tools/go/cfg"
 )
 
-const fluentfpRoot = "github.com/binaryphile/fluentfp"
+// permittedMapperPkgs is the exact, closed set of packages a genuine
+// fluentfp/slice.Mapper may be defined in -- this vehicle's stub defines it
+// directly in fluentfp/slice; real fluentfp aliases it to
+// fluentfp/internal/base (still checked for robustness, though this
+// vehicle never exercises that path -- see fixtures/fluentfp-stub/). A
+// broad fluentfp/* PREFIX match (the R1 shape) let a hypothetical
+// fluentfp/slice/evil.Mapper also satisfy the contract (IMPL-grade R2
+// finding 1) -- closed by enumerating the exact legitimate packages
+// instead of prefix-matching the module root.
+var permittedMapperPkgs = map[string]bool{
+	"github.com/binaryphile/fluentfp/slice":         true,
+	"github.com/binaryphile/fluentfp/internal/base": true,
+}
 
 var Analyzer = &analysis.Analyzer{
 	Name: "contractcheck",
@@ -50,34 +63,56 @@ func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 			continue
 		}
 		for _, node := range block.Nodes {
-			found := false
-			ast.Inspect(node, func(n ast.Node) bool {
-				if found {
-					return false
-				}
-				// Don't descend into function-literal bodies: a live
-				// statement that merely DEFINES a closure (e.g.
-				// `var _ = func() { ... }`) without invoking it does not
-				// make the closure's own body CFG-reachable -- walking in
-				// would wrongly credit an unexecuted mention as
-				// compliant. An immediately-invoked closure's call
-				// expression is still visited normally (it's the
-				// enclosing node, not the FuncLit itself).
-				if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
-					return false
-				}
-				if isFluentChainCall(pass, n) {
-					found = true
-					return false
-				}
-				return true
-			})
-			if found {
+			if nodeReachesFluentChainCall(pass, node) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// nodeReachesFluentChainCall walks `n` for a qualifying chain call, treating
+// a function literal's body as reachable ONLY when the literal is
+// immediately invoked (its enclosing node is a call expression with the
+// literal as the callee) -- so `func(){ ... }()` is inspected like any
+// other reachable code, but a merely-DEFINED, uninvoked closure (`var _ =
+// func(){ ... }`) is not credited (IMPL-grade R2 finding 2's fix, without
+// R2 finding 13's overcorrection that also rejected invoked closures).
+// Closures assigned to a variable and invoked at a LATER, separate call
+// site are a documented residual scope boundary -- this is a structural,
+// not data-flow, check, matching #91119's own precedent of naming call-
+// expression-only forms as a coherent boundary rather than a gap.
+func nodeReachesFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
+	found := false
+	var visit func(ast.Node) bool
+	visit = func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := n.(*ast.CallExpr); ok {
+			if isFluentChainCall(pass, call) {
+				found = true
+				return false
+			}
+			if lit, ok := call.Fun.(*ast.FuncLit); ok {
+				// Immediately-invoked: walk the closure's body now: it
+				// executes as part of this reachable call.
+				ast.Inspect(lit.Body, visit)
+				if found {
+					return false
+				}
+			}
+		}
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			// A bare (non-immediately-invoked) closure: already handled
+			// above if it was an IIFE; otherwise its body is not
+			// reachable via this statement alone.
+			return false
+		}
+		return true
+	}
+	ast.Inspect(n, visit)
+	return found
 }
 
 // isFluentChainCall reports whether `n` is a call to KeepIf or Map whose
@@ -133,7 +168,7 @@ func isFluentSliceMapper(fn *types.Func) bool {
 	if named == nil || named.Obj() == nil || named.Obj().Pkg() == nil {
 		return false
 	}
-	return named.Obj().Name() == "Mapper" && isFluentfpPkg(named.Obj().Pkg().Path())
+	return named.Obj().Name() == "Mapper" && permittedMapperPkgs[named.Obj().Pkg().Path()]
 }
 
 // namedOf strips a leading pointer and returns the *types.Named, or nil.
@@ -143,12 +178,4 @@ func namedOf(t types.Type) *types.Named {
 	}
 	named, _ := t.(*types.Named)
 	return named
-}
-
-// isFluentfpPkg reports whether `path` is the fluentfp module or a package
-// beneath it (mirrors mapfusion.isFluentfpPkg — the same check go-fp-lint's
-// own shipped analyzers already use to resolve a receiver as fluentfp,
-// robust to slice.Mapper's real-module aliasing to internal/base). (C)
-func isFluentfpPkg(path string) bool {
-	return path == fluentfpRoot || len(path) > len(fluentfpRoot) && path[:len(fluentfpRoot)+1] == fluentfpRoot+"/"
 }
