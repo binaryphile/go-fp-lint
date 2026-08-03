@@ -85,9 +85,12 @@ func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 // false`, INSIDE the closure would wrongly count as reachable, reopening
 // finding 2's original dead-code class one level deeper. Closures assigned
 // to a variable and invoked at a LATER, separate call site are a
-// documented residual scope boundary -- this is a structural, not
-// data-flow, check, matching #91119's own precedent of naming
-// call-expression-only forms as a coherent boundary rather than a gap.
+// documented residual scope boundary, RATIFIED (not deferred, not a gap)
+// via evtctl interaction "/scope-fold #87588" (event #96740): closing it
+// needs a real data-flow/points-to analysis, disproportionate to this
+// toy single-function vehicle -- this is a structural, not data-flow,
+// check, matching #91119's own precedent of naming call-expression-only
+// forms as a coherent boundary rather than a gap.
 func nodeReachesFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 	found := false
 	var visit func(ast.Node) bool
