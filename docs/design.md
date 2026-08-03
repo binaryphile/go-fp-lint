@@ -1049,10 +1049,12 @@ gate-bash, author-time IDE/LSP integration.
   repo's flake.nix content — the same `nixpkgs-unstable` pin pattern used
   by `era`'s and `fluentfp`'s already-working flakes). Development and
   verification this cycle used `nix develop "path:$HOME/projects/fluentfp"`
-  (already-cached nixpkgs) as a workaround. Follow-up: verify this repo's
-  own `nix develop` completes cleanly once the evaluation slowdown is
-  understood — may just need a first fetch to complete outside a
-  time-constrained session.
+  (already-cached nixpkgs) as a workaround. Subsequent investigation in
+  #66903 found the repo's `flake.lock` was an empty (0-byte) blob; commit
+  `b9c9c7c` (2026-07-13) replaced it with a valid lockfile pinned to the
+  canonical nixpkgs rev. As of jeeves #88143 (2026-08-03), `nix flake
+  check` and `nix develop` were re-run directly against this repo and both
+  complete cleanly.
 
 ## Verification performed (v2 cycle — `impuresource`, jeeves #65900)
 
