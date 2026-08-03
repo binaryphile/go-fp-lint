@@ -74,14 +74,20 @@ func reachesFluentChainCall(pass *analysis.Pass, body *ast.BlockStmt) bool {
 // nodeReachesFluentChainCall walks `n` for a qualifying chain call, treating
 // a function literal's body as reachable ONLY when the literal is
 // immediately invoked (its enclosing node is a call expression with the
-// literal as the callee) -- so `func(){ ... }()` is inspected like any
-// other reachable code, but a merely-DEFINED, uninvoked closure (`var _ =
-// func(){ ... }`) is not credited (IMPL-grade R2 finding 2's fix, without
-// R2 finding 13's overcorrection that also rejected invoked closures).
-// Closures assigned to a variable and invoked at a LATER, separate call
-// site are a documented residual scope boundary -- this is a structural,
-// not data-flow, check, matching #91119's own precedent of naming call-
-// expression-only forms as a coherent boundary rather than a gap.
+// literal, optionally parenthesized, as the callee) -- so `func(){ ... }()`
+// and `(func(){ ... })()` are inspected like any other reachable code, but
+// a merely-DEFINED, uninvoked closure (`var _ = func(){ ... }`) is not
+// credited (IMPL-grade R2 finding 2's fix, without R2 finding 13's
+// overcorrection that also rejected invoked closures). An invoked
+// closure's body gets its OWN CFG-reachability analysis via a recursive
+// call to reachesFluentChainCall (IMPL-grade R3 finding 13 remainder) --
+// otherwise a chain call after an unconditional return, or inside `if
+// false`, INSIDE the closure would wrongly count as reachable, reopening
+// finding 2's original dead-code class one level deeper. Closures assigned
+// to a variable and invoked at a LATER, separate call site are a
+// documented residual scope boundary -- this is a structural, not
+// data-flow, check, matching #91119's own precedent of naming
+// call-expression-only forms as a coherent boundary rather than a gap.
 func nodeReachesFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 	found := false
 	var visit func(ast.Node) bool
@@ -94,13 +100,15 @@ func nodeReachesFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 				found = true
 				return false
 			}
-			if lit, ok := call.Fun.(*ast.FuncLit); ok {
-				// Immediately-invoked: walk the closure's body now: it
-				// executes as part of this reachable call.
-				ast.Inspect(lit.Body, visit)
-				if found {
-					return false
+			if lit, ok := unwrapFuncLit(call.Fun); ok {
+				// Immediately-invoked: recurse with the closure's OWN
+				// CFG-reachability analysis, not a flat walk, so dead
+				// code inside the closure is excluded exactly like
+				// top-level dead code.
+				if reachesFluentChainCall(pass, lit.Body) {
+					found = true
 				}
+				return false
 			}
 		}
 		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
@@ -113,6 +121,19 @@ func nodeReachesFluentChainCall(pass *analysis.Pass, n ast.Node) bool {
 	}
 	ast.Inspect(n, visit)
 	return found
+}
+
+// unwrapFuncLit reports whether `e` is a function literal, stripping any
+// enclosing parentheses (`(func(){...})()` as well as `func(){...}()`).
+func unwrapFuncLit(e ast.Expr) (*ast.FuncLit, bool) {
+	for {
+		if p, ok := e.(*ast.ParenExpr); ok {
+			e = p.X
+			continue
+		}
+		lit, ok := e.(*ast.FuncLit)
+		return lit, ok
+	}
 }
 
 // isFluentChainCall reports whether `n` is a call to KeepIf or Map whose
