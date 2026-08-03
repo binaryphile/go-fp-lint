@@ -58,16 +58,30 @@ The preregistration's §6 calls for a secondary, explicitly non-causal descripti
 (functional-pass rate by arm; raw `pre_count`/`post_count` by arm; residual-rate conditional on
 functional pass) — informative context, never substituted for the primary endpoint above.
 
-**This breakdown cannot be reported for this campaign.** Root cause, found during analysis (not
-before): `wire-and-score.sh` computes the full raw `score.sh` record (`contract_compliant`,
-`compiled`, `post_fix_compiled`, `functional_pass`, `pre_count`, `post_count`, `residual`,
-`clean`) per slot, but writes it only to a `/tmp/score-slot-NN-$$.json` scratch file that
-`run-campaign.sh` deletes immediately after extracting the narrower `pass`/`mismatches`/
-`infra_void` subset into the durable `journal/slot-NN.json` record. The raw fields were never
-retained past each slot's own processing — this is a genuine gap in this cycle's harness design
-(not inherited from `#91119`, which scored via a different, `pre_count`/`post_count`-free
-mechanism entirely), discovered only after the campaign had already run to completion, when
-retention would have needed to happen live, per-slot.
+**This breakdown cannot be reported for this campaign — for two DIFFERENT reasons depending on
+outcome, not one uniform cause (IMPL-grade R2 correction of an internally inconsistent earlier
+draft):**
+
+1. **For the 18 `contract_compliant:false` slots, the data was never GENERATED at all**, not
+   discarded after computation. `score.sh` (lines 63-66) returns early the moment
+   `contract_compliant != true`, emitting literal `null` for `pre_count`/`post_count`/`residual`
+   and never calling `transform-primary --only nestedcall` (line 69) in the first place. The
+   pipeline's own short-circuit design means these 18 measurements simply do not exist to be
+   retained or lost.
+2. **For the 2 passing slots, the data WAS genuinely computed** (score.sh's full pipeline ran to
+   completion) **but then discarded by the harness**: `wire-and-score.sh` writes the complete raw
+   record to a `/tmp/score-slot-NN-$$.json` scratch file that `run-campaign.sh` deletes
+   immediately after extracting only the narrower `pass`/`mismatches`/`infra_void` subset into the
+   durable `journal/slot-NN.json` record. This part IS a retention gap in this cycle's harness
+   design (not inherited from `#91119`, which scored via a different, `pre_count`/`post_count`-free
+   mechanism entirely) — discovered only after the campaign had already run to completion, when
+   retention would have needed to happen live, per-slot.
+
+**Net effect**: even a full retention fix (the follow-up below) would only recover secondary data
+for the 2 passing slots per arm-equivalent, not the 18 failing ones — those would need `score.sh`
+itself changed to compute `pre_count`/`post_count` independently of `contract_compliant`'s
+short-circuit, a separate and larger change than a retention fix alone, not undertaken here
+(would itself require its own plan/review, since it changes the frozen scoring contract).
 
 **This is a protocol deviation, not a minor omission (IMPL-grade correction).** The
 preregistration's §6 secondary breakdown is REQUIRED reporting, not optional context — its
@@ -152,12 +166,13 @@ them from this run).
 
 ## Deferred (tracked)
 
-- **New follow-up (this cycle):** `wire-and-score.sh`/`run-campaign.sh`'s per-slot raw
-  `score.sh` record (`contract_compliant`, `compiled`, `post_fix_compiled`, `functional_pass`,
-  `pre_count`, `post_count`, `residual`) is discarded after each slot instead of being retained
-  in the durable journal record — fix so any FUTURE campaign reusing this harness pattern can
-  report the full secondary breakdown the preregistration's §6 calls for. Task to be filed at
-  Completion Gate.
+- **Filed this cycle: `go-fp-lint#98182`.** For the 2 passing-slot case, `wire-and-score.sh`/
+  `run-campaign.sh`'s per-slot raw `score.sh` record is discarded after each slot instead of
+  being retained in the durable journal record — fix so any FUTURE campaign reusing this harness
+  pattern can report the full secondary breakdown for slots that reach the transform stage. Note:
+  this fix alone does NOT recover data for `contract_compliant:false` slots (see Secondary
+  breakdown § above) — that would require changing `score.sh`'s own short-circuit design, a
+  separate, larger, frozen-contract change not undertaken by this follow-up.
 - `#96719`'s two hardening items — still carried forward, uninformed by this run (see above).
 
 ## Honest summary
