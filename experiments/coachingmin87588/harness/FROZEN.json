@@ -1,0 +1,61 @@
+{
+  "purpose": "Freeze-before-dispatch manifest (jeeves #96780, forked from #93569's causalarm91119/harness/FROZEN.json shape; prereg jeeves #87588; grade R1(REJECT)->R2(SEND BACK)->R3(APPROVE)). Every pin here is fixed BEFORE slot 1 of the 20-slot campaign. The intervention apparatus itself must be frozen, not just the assignment vector.",
+  "frozen_at": "2026-08-03",
+  "vector": {
+    "arms": ["C","C","C","U","C","C","U","C","U","C","U","U","U","U","U","C","U","C","U","C"],
+    "n_per_arm": 10,
+    "seed_method": "Python random.Random(87588).shuffle(['U']*10 + ['C']*10)",
+    "source": "jeeves investigations/2026-08-02-transform-primary-coaching-minimum-preregistration.md §8 (frozen mechanism); vector computed at plan-authoring time (~/.claude/plans/96780-cheerful-nibbling-sprout.md), R2 fix"
+  },
+  "briefs": {
+    "arm_U_sha256": "b04aada5a29db0f074bbabd786b788e21d607738add4fd26081b51fc64bc5c10",
+    "arm_C_sha256": "084e99d753ce64c8390f9c810a299586e0a4bbeabff07d0aa475d5ff51c7ae62",
+    "extraction": "Arm U authored against the prereg's frozen §3 goal/contract; Arm C is Arm U byte-for-byte plus a verbatim-appended coaching block (go-development-guide.md lines 1309-1360, §10 'Using fluentfp' through 'When to Use fluentfp' — confirmed byte-identical via diff at authoring time)"
+  },
+  "delegate": {
+    "model": "claude-haiku-4-5-20251001",
+    "invocation": "claude -p \"<brief>\" --model claude-haiku-4-5-20251001 --output-format json --permission-mode bypassPermissions",
+    "timeout_seconds": 900,
+    "delivery_contract": "package coachingmin87588 at module path example.com/delegate/coachingmin87588, exports func SummarizeActiveUsers(users []User) string plus the frozen User type"
+  },
+  "oracle": {
+    "commit": "16991c9de384e47bfa76a0d231f707869cfe3259",
+    "worktree": "~/projects/go-fp-lint-oracle-16991c9 (detached)",
+    "full_tree_sha256": "777d1eb2f2aa9650f01f691cd962be2ef9c341904f63f5e3eafd07264de01d51",
+    "full_tree_hash_method": "sha256sum of every file under experiments/coachingmin87588/ (sorted paths, excludes harness/ which is never present at the pinned commit), piped through sha256sum again",
+    "verified_clean": "git status --porcelain empty at freeze time (no dirty/untracked files)"
+  },
+  "preoracle_base": {
+    "commit": "1eac46e0b9ffa20dd42e2505bb68e4ac6786ae2b",
+    "tag": "preoracle-base",
+    "verified_absent": "experiments/coachingmin87588/oracle.go confirmed absent via git ls-tree at this commit (same tag #91119 verified reusable for; no new tag needed)"
+  },
+  "scoring_env": {
+    "go_binary": "/nix/store/1xklj6dmgcpgz60c9w2ynaq7ynzfsrrq-go-1.26.4/bin/go (direct nix-store; ambient PATH go — the project's bin/go wrapper — hangs headless, jeeves #87588 Phase 3a finding, score_test.bash's realGoPath)",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOSUMDB": "off (not set ambient; wire-and-score.sh does not override — score.sh's own go vet/go test calls set GOFLAGS/GOPROXY per-call but rely on cached modules, no live GOSUMDB lookup observed in this environment)",
+    "GOFLAGS": "-mod=mod",
+    "x_tools_pinned_version": "v0.48.0",
+    "gocache": "score.sh's own $WorkDir (ephemeral per-call, not shared — distinct from #91119's shared harness/.gocache; score.sh was already BUILT prior to this cycle and not altered)"
+  },
+  "delegate_sandbox": {
+    "tool": "dojo (bwrap-based), commit 84a48a8c0ce5d4f30d776cf5e92ed3f337b5eaa6",
+    "isolation": "fresh --depth 1 --no-local clone at preoracle-base tag; git remote remove origin; dojo --hide ~/projects (removes oracle + source repo visibility); --persist <slot clone> + --persist <fresh empty per-slot GOMODCACHE dir> (writable); network left available (required for the Anthropic API)",
+    "verified_per_slot": "no remotes; oracle path (experiments/coachingmin87588/oracle.go) absent; oracle blob unreachable via git cat-file -e (checked before every dispatch, dispatch.bash forked unchanged from #91119 except this path)"
+  },
+  "oracle_blob_sha_oracle_go": "37ec5c4b70d126f782fa40708275fb05ebadd961",
+  "analysis_config_sha256": "6c88a6c7592bd6f60e8f9cc260249b154cb7030aef66c0cdb7af3463c218cb97",
+  "stats_refs_sha256": "2337c8a10514be321e2a5812c2f9a3ce3b92830d4b16fb9c839f01acd687d98d",
+  "provenance": {
+    "purpose": "jeeves #96780 design §1 R1 finding: any drift from these SHAs is a precondition failure, not a silent re-read.",
+    "preregistration_doc_commit_sha": "a7303506febfa60ddf60510bcca1e39e5eaceb67",
+    "preregistration_doc_path": "jeeves investigations/2026-08-02-transform-primary-coaching-minimum-preregistration.md",
+    "nestedcall_safety_domain_design_md_commit_sha": "16991c9de384e47bfa76a0d231f707869cfe3259",
+    "nestedcall_safety_domain_design_md_path": "go-fp-lint docs/design.md §v12 (nestedcall safety-domain, six conditions)",
+    "coaching_block_source_whole_file_blob_sha": "b0a6c4fa7fcec5ebbc2bc8791cac6f6d21221d60",
+    "coaching_block_source_span_blob_sha": "b956070c588375a073ce3ffec3f5861aface0517",
+    "coaching_block_source_path": "jeeves guides/go-development-guide.md lines 1309-1360 (§10 'Using fluentfp' through 'When to Use fluentfp')"
+  },
+  "harness_commit": "RECORDED_AS_THE_GIT_COMMIT_THAT_ADDS_THIS_FILE — see go-fp-lint git log for experiments/coachingmin87588/harness/ at freeze time; not embedded here to avoid a self-referential hash"
+}

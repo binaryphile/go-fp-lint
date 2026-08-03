@@ -1,0 +1,27 @@
+**Task: implement `SummarizeActiveUsers`.**
+
+Implement `SummarizeActiveUsers(users []User) string`: filter `users` to those with
+`Active == true`, format each as `"<Name> <<Email>>"` (name, a space, then the email address in
+angle brackets — e.g. `Ann <ann@x.test>`), and join the results with `", "`, preserving input
+order. Inactive users are excluded entirely. Empty input (or an input with no active users)
+returns the empty string.
+
+Use the vehicle's frozen `fluentfp/slice` chain methods (`KeepIf`, `Map`) to do the filtering
+and transforming — not hand-written for-loops.
+
+**User type (frozen):**
+
+```go
+type User struct {
+	Name   string
+	Email  string
+	Active bool
+}
+```
+
+**Delivery (required):** deliver your implementation as Go package **`coachingmin87588`** at
+module path **`example.com/delegate/coachingmin87588`** (a module with its own `go.mod`),
+exporting **`func SummarizeActiveUsers(users []User) string`** and the `User` type above. Your
+`go.mod` should `require github.com/binaryphile/fluentfp v0.0.0`, and your code should import
+`github.com/binaryphile/fluentfp/slice`, using its `slice.From(...)` plus `.KeepIf(...)` and
+`.Map(...)` chain methods to build the result.

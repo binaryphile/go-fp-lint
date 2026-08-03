@@ -1,0 +1,14 @@
+{
+  "alpha": 0.05,
+  "ci": 0.95,
+  "fisher": "two-sided",
+  "arm_order": "C_minus_U",
+  "effect_sign": "positive_means_C_higher",
+  "infra_void_denominator": "exclude",
+  "n_per_arm_frozen": 10,
+  "interpretation": {
+    "significant_C_gt_U": "directional support: the coaching block raises the ITT-clean rate on this vehicle",
+    "significant_U_gt_C": "coaching HURT the ITT-clean rate on this vehicle (a real, reportable direction, not inconclusive)",
+    "not_significant": "underpowered / no detectable effect at n=10 (NOT evidence of no effect)"
+  }
+}

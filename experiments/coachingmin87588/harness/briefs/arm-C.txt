@@ -1,0 +1,82 @@
+**Task: implement `SummarizeActiveUsers`.**
+
+Implement `SummarizeActiveUsers(users []User) string`: filter `users` to those with
+`Active == true`, format each as `"<Name> <<Email>>"` (name, a space, then the email address in
+angle brackets — e.g. `Ann <ann@x.test>`), and join the results with `", "`, preserving input
+order. Inactive users are excluded entirely. Empty input (or an input with no active users)
+returns the empty string.
+
+Use the vehicle's frozen `fluentfp/slice` chain methods (`KeepIf`, `Map`) to do the filtering
+and transforming — not hand-written for-loops.
+
+**User type (frozen):**
+
+```go
+type User struct {
+	Name   string
+	Email  string
+	Active bool
+}
+```
+
+**Delivery (required):** deliver your implementation as Go package **`coachingmin87588`** at
+module path **`example.com/delegate/coachingmin87588`** (a module with its own `go.mod`),
+exporting **`func SummarizeActiveUsers(users []User) string`** and the `User` type above. Your
+`go.mod` should `require github.com/binaryphile/fluentfp v0.0.0`, and your code should import
+`github.com/binaryphile/fluentfp/slice`, using its `slice.From(...)` plus `.KeepIf(...)` and
+`.Map(...)` chain methods to build the result.
+
+---
+
+## 10. Using fluentfp
+
+[fluentfp](https://github.com/binaryphile/fluentfp) provides functional operations for Go slices.
+
+### Why FluentFP Matters at Scale
+
+This isn't about style preferences. It's about two things that define code quality:
+
+**1. Correct by construction.** A loop has 5+ places to introduce bugs:
+
+```go
+count := 0                          // wrong initial value?
+for _, t := range tickets {         // wrong collection?
+    if t.CompletedTick >= cutoff {  // wrong field? wrong operator?
+        count++                     // forgot to increment?
+    }
+}                                   // used result before loop finished?
+```
+
+The FluentFP equivalent has zero:
+
+```go
+slice.From(tickets).KeepIf(completedAfterCutoff).Len()
+```
+
+You can't forget to initialize. You can't iterate the wrong collection. You can't forget to append. The pattern either works or doesn't compile.
+
+**2. Intent over mechanics.** Code should say *what* it does, not *how*:
+
+```go
+// Mechanics: declare, iterate, append, return
+result := make([]float64, 0, len(history))
+for _, s := range history {
+    result = append(result, s.PercentUsed)
+}
+return result
+
+// Intent: extract PercentUsed from history
+return slice.From(history).ToFloat64(Snapshot.GetPercentUsed)
+```
+
+At scale, these compound. A codebase with fewer failure modes has fewer bugs. Code that reads as intent is code you can understand six months later. These aren't nice-to-haves—they're the job.
+
+### When to Use fluentfp
+
+| Use fluentfp when... | Use raw loops when... |
+|----------------------|----------------------|
+| Transforming entire collections | Early exit on first match |
+| Filtering with clear predicates | Accumulating into maps (except `ToSet`) |
+| Chaining operations readably | Profiled bottleneck slowing the drumbeat |
+| Building membership sets (`ToSet`) | Index access needed mid-loop |
+| Method references available | Generators with probabilistic logic |
