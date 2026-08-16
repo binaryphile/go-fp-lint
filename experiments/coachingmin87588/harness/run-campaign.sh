@@ -189,6 +189,7 @@ runCampaign.processSlot() {
   local scoreResult=/tmp/score-slot-$(printf '%02d' $slot)-$$.json
   rm -f $scoreResult
   local resultExists=no resultPass=false mismatches='[]' resultInfraVoid=false
+  local scoredFull_='{}'
   bash $Here/wire-and-score.sh $delegatePkgDir $oracleWt $scoreResult $journalDir slot$slot 2>/dev/null ||:
   # Grade IMPL-F8/R2-2/R3-2 fix (forked unchanged): the result file is
   # atomically written but was previously consumed via bare `jq -r .pass`
@@ -207,6 +208,14 @@ runCampaign.processSlot() {
     resultPass=$(jq -r .pass <$scoreResult)
     mismatches=$(jq -c .mismatches <$scoreResult)
     resultInfraVoid=$(jq -r '.infra_void // false' <$scoreResult)
+    # #98182: wire-and-score.sh's own jq already merges score.sh's full raw
+    # record (contract_compliant/compiled/post_fix_compiled/functional_pass/
+    # pre_count/post_count/residual) into this scratch file alongside the
+    # bridge fields -- capture it here so it survives the `rm -f $scoreResult`
+    # below instead of being discarded. The preregistration's own §6
+    # secondary PRE/POST breakdown needs these fields and previously had no
+    # durable copy to read them from.
+    scoredFull_=$(cat $scoreResult)
   fi
 
   local controlAfter=$(scorerControl.Check $refCorrectDir $oracleWt $Here)
@@ -216,9 +225,16 @@ runCampaign.processSlot() {
   local classifiedRest=${classified#* }
   local reason=${classifiedRest%% *}
 
-  local combinedMetrics=$(jq -n --argjson c "$claudeMetrics_" --argjson p $resultPass \
+  # #98182: merge $scoredFull_ (the full raw score.sh record, or '{}' when
+  # unavailable) before the explicit override fields, so score_pass/
+  # mismatches/infra_void still win over any same-named field in the raw
+  # record (preserving existing consumer behavior, e.g. run-campaign.sh's
+  # own `.metrics.infra_void` read below) while every other raw field
+  # (contract_compliant, compiled, post_fix_compiled, functional_pass,
+  # pre_count, post_count, residual) is now retained in the journal record.
+  local combinedMetrics=$(jq -n --argjson c "$claudeMetrics_" --argjson raw "$scoredFull_" --argjson p $resultPass \
     --argjson m "$mismatches" --arg cb $controlBefore --arg ca $controlAfter --argjson iv $resultInfraVoid \
-    '$c + {score_pass:$p, mismatches:$m, control_before:$cb, control_after:$ca, infra_void:$iv}')
+    '$c + $raw + {score_pass:$p, mismatches:$m, control_before:$cb, control_after:$ca, infra_void:$iv}')
 
   # Grade IMPL-R2-4 fix (forked unchanged): propagate journal.Record's
   # failure explicitly rather than letting `local x=$(...)` mask it.
